@@ -1,0 +1,16 @@
+{
+  "name": "warm-desk-garden-api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "mongodb": "^7.3.0",
+    "node-appwrite": "^20.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.3",
+    "typescript": "~6.0.2"
+  }
+}

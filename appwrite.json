@@ -1,0 +1,22 @@
+{
+    "projectId": "6a39ed84003504b380f9",
+    "projectName": "Warm Desk Garden",
+    "functions": [
+        {
+            "$id": "warm-desk-garden-api",
+            "name": "Warm Desk Garden API",
+            "runtime": "node-22",
+            "execute": [
+                "users"
+            ],
+            "events": [],
+            "schedule": "",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "entrypoint": "dist/index.js",
+            "commands": "npm install && npm run build",
+            "path": "functions/api"
+        }
+    ]
+}
