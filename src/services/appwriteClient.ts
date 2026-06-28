@@ -10,6 +10,8 @@ export const appwriteConfig = {
   bucketId,
 }
 
+type FileViewConfig = typeof appwriteConfig
+
 export const isAppwriteConfigured = Boolean(endpoint && projectId)
 
 export const appwriteClient = new Client()
@@ -42,6 +44,15 @@ export function buildOwnerFilePermissions(userId: string) {
   ]
 }
 
+export function buildFileViewUrl(fileId: string, config: FileViewConfig = appwriteConfig) {
+  if (!config.endpoint || !config.projectId || !config.bucketId) {
+    throw new Error('Appwrite endpoint, project id, and bucket id are required to view files.')
+  }
+
+  const endpointUrl = config.endpoint.replace(/\/$/, '')
+  return `${endpointUrl}/storage/buckets/${encodeURIComponent(config.bucketId)}/files/${encodeURIComponent(fileId)}/view?project=${encodeURIComponent(config.projectId)}`
+}
+
 export async function uploadUserFile(file: File) {
   if (!bucketId) {
     throw new Error('VITE_APPWRITE_BUCKET_ID is required to upload files.')
@@ -54,4 +65,9 @@ export async function uploadUserFile(file: File) {
     file,
     buildOwnerFilePermissions(user.$id),
   )
+}
+
+export async function uploadUserFileForDisplay(file: File) {
+  const uploadedFile = await uploadUserFile(file)
+  return buildFileViewUrl(uploadedFile.$id)
 }

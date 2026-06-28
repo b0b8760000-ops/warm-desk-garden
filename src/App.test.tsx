@@ -307,7 +307,7 @@ describe('Warm Desk Garden app shell', () => {
       screen.getByLabelText('選擇照片檔案'),
       new File(['photo'], '旅行照片.png', { type: 'image/png' }),
     )
-    const photoNameInput = screen.getByLabelText('照片名稱：旅行照片.png')
+    const photoNameInput = await screen.findByLabelText('照片名稱：旅行照片.png')
     await user.clear(photoNameInput)
     await user.type(photoNameInput, '封面照片')
 
@@ -316,7 +316,7 @@ describe('Warm Desk Garden app shell', () => {
       new File(['pdf'], '旅行行程.pdf', { type: 'application/pdf' }),
     )
 
-    const pdfNameInput = screen.getByLabelText('PDF名稱：旅行行程.pdf')
+    const pdfNameInput = await screen.findByLabelText('PDF名稱：旅行行程.pdf')
     await user.clear(pdfNameInput)
     await user.type(pdfNameInput, '整理資料.pdf')
     await user.click(screen.getByRole('button', { name: '全部' }))
@@ -353,13 +353,13 @@ describe('Warm Desk Garden app shell', () => {
       screen.getByLabelText('選擇照片檔案'),
       new File(['photo'], '桌面照片.png', { type: 'image/png' }),
     )
-    expect(screen.getByDisplayValue('桌面照片.png')).toBeInTheDocument()
+    expect(await screen.findByDisplayValue('桌面照片.png')).toBeInTheDocument()
 
     await user.upload(
       screen.getByLabelText('選擇 PDF 檔案'),
       new File(['pdf'], '閱讀資料.pdf', { type: 'application/pdf' }),
     )
-    expect(screen.getByDisplayValue('閱讀資料.pdf')).toBeInTheDocument()
+    expect(await screen.findByDisplayValue('閱讀資料.pdf')).toBeInTheDocument()
 
     await user.upload(
       screen.getByLabelText('選擇照片檔案'),
@@ -448,7 +448,7 @@ describe('Warm Desk Garden app shell', () => {
       new File(['photo'], '心得照片.png', { type: 'image/png' }),
     )
 
-    expect(screen.getByDisplayValue('心得照片.png')).toBeInTheDocument()
+    expect(await screen.findByDisplayValue('心得照片.png')).toBeInTheDocument()
   })
 
   it('edits and deletes uploaded reflection photos', async () => {
@@ -462,7 +462,7 @@ describe('Warm Desk Garden app shell', () => {
       new File(['photo'], '心得照片.png', { type: 'image/png' }),
     )
 
-    const photoNameInput = screen.getByLabelText('心得照片名稱：心得照片.png')
+    const photoNameInput = await screen.findByLabelText('心得照片名稱：心得照片.png')
     await user.clear(photoNameInput)
     await user.type(photoNameInput, '整理後的照片')
 

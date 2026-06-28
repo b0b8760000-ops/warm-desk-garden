@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { appwriteAccount, isAppwriteConfigured } from './services/appwriteClient'
+import { appwriteAccount, isAppwriteConfigured, uploadUserFileForDisplay } from './services/appwriteClient'
 import {
   createWorkspaceRecord,
   deleteWorkspaceRecord,
@@ -195,6 +195,18 @@ function getLocalFileUrl(file: File) {
   }
 
   return ''
+}
+
+async function getStoredFileUrl(file: File) {
+  if (isAppwriteConfigured) {
+    try {
+      return await uploadUserFileForDisplay(file)
+    } catch (error) {
+      console.warn('Appwrite file upload unavailable, using local preview.', error)
+    }
+  }
+
+  return getLocalFileUrl(file)
 }
 
 function App() {
@@ -664,7 +676,7 @@ function App() {
     }
   }
 
-  const handleAttachFile = (noteId: string, file: File, kind: 'photo' | 'pdf'): AttachFileResult => {
+  const handleAttachFile = async (noteId: string, file: File, kind: 'photo' | 'pdf'): Promise<AttachFileResult> => {
     const isValidPhoto = kind === 'photo' && file.type.startsWith('image/')
     const isValidPdf = kind === 'pdf' && file.type === 'application/pdf'
 
@@ -672,11 +684,12 @@ function App() {
       return { ok: false, message: '目前只接受照片與 PDF 檔案。' }
     }
 
+    const fileUrl = await getStoredFileUrl(file)
     const attachment: NoteAttachment = {
       id: `attachment-${Date.now()}-${file.name}`,
       name: file.name,
       kind,
-      url: getLocalFileUrl(file),
+      url: fileUrl,
       sizeLabel: formatFileSize(file.size),
     }
 
@@ -1892,7 +1905,7 @@ function NotesPage({
   notes: WorkspaceNote[]
   selectedFolderId: string
   onAddNote: (folderName: string) => WorkspaceNote
-  onAttachFile: (noteId: string, file: File, kind: 'photo' | 'pdf') => AttachFileResult
+  onAttachFile: (noteId: string, file: File, kind: 'photo' | 'pdf') => Promise<AttachFileResult>
   onDeleteAttachment: (noteId: string, attachmentId: string) => void
   onDeleteNote: (noteId: string) => void
   onOpenLightbox: (url: string) => void
@@ -1975,14 +1988,15 @@ function NotesPage({
     setUploadMessage('筆記已刪除。')
   }
 
-  const handleUpload = (file: File | undefined, kind: 'photo' | 'pdf') => {
+  const handleUpload = async (file: File | undefined, kind: 'photo' | 'pdf') => {
     if (!file || !featuredNote) return
     if (!hasFolderNotes) {
       setUploadMessage('請先新增一則筆記，再上傳照片或 PDF。')
       return
     }
 
-    const result = onAttachFile(featuredNote.id, file, kind)
+    setUploadMessage('上傳中...')
+    const result = await onAttachFile(featuredNote.id, file, kind)
     if (!result.ok) {
       setUploadMessage(result.message)
       return
@@ -2533,7 +2547,7 @@ function ReflectionsPage({ onOpenLightbox }: { onOpenLightbox: (url: string) => 
     setReflectionUploadMessage('')
   }
 
-  const handleReflectionPhotoUpload = (file: File | undefined) => {
+  const handleReflectionPhotoUpload = async (file: File | undefined) => {
     if (!activeRef) return
     if (!file) return
 
@@ -2542,11 +2556,13 @@ function ReflectionsPage({ onOpenLightbox }: { onOpenLightbox: (url: string) => 
       return
     }
 
+    setReflectionUploadMessage('上傳中...')
+    const imageUrl = await getStoredFileUrl(file)
     const uploadedPhoto = {
       id: `reflection-photo-${Date.now()}-${file.name}`,
       title: file.name,
       originalTitle: file.name,
-      imageUrl: getLocalFileUrl(file),
+      imageUrl,
     }
 
     setReflectionPhotoUploads((current) => ({
@@ -3045,14 +3061,9 @@ function ChatPage({
     }))
   }
 
-  const uploadDraftPhotos = (files: FileList | null) => {
+  const uploadDraftPhotos = async (files: FileList | null) => {
     if (!files?.length) return
-    const uploadedUrls = Array.from(files).map((file) => {
-      if (typeof URL !== 'undefined' && 'createObjectURL' in URL) {
-        return URL.createObjectURL(file)
-      }
-      return `uploaded://${file.name}`
-    })
+    const uploadedUrls = await Promise.all(Array.from(files).map((file) => getStoredFileUrl(file)))
     setDraft((currentDraft) => ({
       ...currentDraft,
       images: [...currentDraft.images, ...uploadedUrls],
@@ -5826,14 +5837,12 @@ function UploadPhotoModal({
     onClose()
   }
 
-  const handleMockUpload = (files: FileList | null) => {
+  const handleMockUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return
     const file = files[0]
-    if (typeof URL !== 'undefined' && 'createObjectURL' in URL) {
-      setPhotoUrl(URL.createObjectURL(file))
-      if (!photoTitle) {
-        setPhotoTitle(file.name.split('.')[0])
-      }
+    setPhotoUrl(await getStoredFileUrl(file))
+    if (!photoTitle) {
+      setPhotoTitle(file.name.split('.')[0])
     }
   }
 
