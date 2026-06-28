@@ -1007,7 +1007,11 @@ function App() {
         
         setWorkspaceAlbums(snapshot.albums as Album[])
         setWorkspacePhotos(snapshot.photos as Photo[])
-        setChatPosts(snapshot.chatPosts as ChatFeedPost[])
+        const mappedPosts = ((snapshot.chatPosts as any[]) || []).map(p => ({
+          ...p,
+          editable: p.ownerId === authUser.id
+        }))
+        setChatPosts(mappedPosts)
         setWorkspaceEvents(snapshot.calendarEvents as CalendarEvent[])
         setWorkspaceTasks(snapshot.calendarTasks as CalendarTask[])
       } catch (error) {
@@ -1263,11 +1267,36 @@ function App() {
   }
 
   const handleCreateChatPost = (post: ChatFeedPost) => {
-    syncCreateRecord('chat-posts', post)
+    if (!authUser) return
+    const acceptedFriendIds = workspaceFriends
+      .filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus)
+      .map(f => f.id)
+    const postPayload = {
+      ...post,
+      author: authUser.name || '我',
+      avatarUrl: userAvatarUrl,
+      visibleToUserIds: acceptedFriendIds
+    }
+    syncCreateRecord('chat-posts', postPayload)
   }
 
   const handleUpdateChatPost = (postId: string, post: Partial<ChatFeedPost>) => {
-    syncUpdateRecord<ChatFeedPost>('chat-posts', postId, post)
+    if (!authUser) return
+    const acceptedFriendIds = workspaceFriends
+      .filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus)
+      .map(f => f.id)
+    const updatedComments = post.comments?.map(c => {
+      if (c.author === '我') {
+        return { ...c, author: authUser.name || '我' }
+      }
+      return c
+    })
+    const updatePayload = {
+      ...post,
+      comments: updatedComments || post.comments,
+      visibleToUserIds: acceptedFriendIds
+    }
+    syncUpdateRecord<ChatFeedPost>('chat-posts', postId, updatePayload)
   }
 
   const handleDeleteChatPost = (postId: string) => {
@@ -1420,6 +1449,7 @@ function App() {
             setActiveThreadId={setActiveChatThreadId}
             activeTab={chatActiveTab}
             setActiveTab={setChatActiveTab}
+            currentUserName={authUser?.name || ''}
           />
         ) : null}
         {activeSection === '好友' ? (
@@ -3433,6 +3463,7 @@ function ChatPage({
   setActiveThreadId,
   activeTab: activeRightTab,
   setActiveTab: setActiveRightTab,
+  currentUserName,
 }: {
   onOpenLightbox: (url: string) => void
   chatThreads: ChatThread[]
@@ -3446,6 +3477,7 @@ function ChatPage({
   setActiveThreadId: (id: string) => void
   activeTab: string
   setActiveTab: (tab: string) => void
+  currentUserName: string
 }) {
   const buildCommentPlaceholders = (count: number): ChatComment[] =>
     Array.from({ length: count }, (_, index) => ({
@@ -3822,7 +3854,7 @@ function ChatPage({
                     {post.isOnline ? <i aria-hidden="true" /> : null}
                   </span>
                   <span className="letter-row-brief">
-                    <strong>{post.author}</strong>
+                    <strong>{post.editable ? '我' : post.author}</strong>
                     <span>{post.text}</span>
                   </span>
                   <small className="time-badge">{post.time}</small>
@@ -3970,7 +4002,7 @@ function ChatPage({
                     {activePost.isOnline ? <i aria-hidden="true" /> : null}
                   </span>
                   <div>
-                    <strong>{activePost.author}</strong>
+                    <strong>{activePost.editable ? '我' : activePost.author}</strong>
                     <span>{activePost.action}</span>
                   </div>
                 </div>
@@ -3996,7 +4028,7 @@ function ChatPage({
                 <div className="share-photo-grid">
                   {activePost.images.map((imageUrl, index) => (
                     <button
-                      aria-label={`查看${activePost.author}第${index + 1}張照片`}
+                      aria-label={`查看${activePost.editable ? '我' : activePost.author}第${index + 1}張照片`}
                       className="share-photo-item"
                       key={imageUrl}
                       onClick={() => onOpenLightbox(imageUrl)}
@@ -4026,7 +4058,7 @@ function ChatPage({
                 <div className="chat-comment-list">
                   {activePost.comments.slice(-3).map((comment) => (
                     <p key={comment.id}>
-                      <strong>{comment.author}</strong>
+                      <strong>{comment.author === currentUserName ? '我' : comment.author}</strong>
                       <span>{comment.text}</span>
                       <small>{comment.time}</small>
                     </p>
