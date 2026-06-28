@@ -889,6 +889,81 @@ describe('Warm Desk Garden app shell', () => {
     expect(screen.getByText(/個人聊天室 · 邀請好友/)).toBeInTheDocument()
   })
 
+  it('does not show pending relationships as real friends in the friend detail pane', async () => {
+    const user = userEvent.setup()
+    mockWorkspaceSnapshot({
+      friends: [
+        {
+          id: 'friendship-pending',
+          requesterId: 'user-1',
+          requesterName: '學良',
+          requesterEmail: 'garden@example.com',
+          addresseeId: 'pending-friend',
+          addresseeName: '尚未接受的人',
+          addresseeEmail: 'pending@example.com',
+          addresseeStatus: '還沒接受邀請',
+          addresseeTone: 'green',
+          friendshipStatus: 'pending',
+        },
+      ],
+    })
+    await renderAuthenticatedApp()
+
+    await user.click(within(screen.getByLabelText('紙質側邊導覽')).getByRole('button', { name: '好友' }))
+    const friendBook = await screen.findByLabelText('好友手札活頁本')
+
+    expect(within(friendBook).getByText('共 0 個項目')).toBeInTheDocument()
+    expect(within(friendBook).queryByRole('heading', { name: '尚未接受的人' })).not.toBeInTheDocument()
+    expect(within(friendBook).getByText('目前沒有已接受的好友，先從「邀請」分頁新增或接受好友。')).toBeInTheDocument()
+  })
+
+  it('shares new chat posts with accepted friends only', async () => {
+    const user = userEvent.setup()
+    mockWorkspaceSnapshot({
+      friends: [
+        {
+          id: 'friendship-accepted',
+          requesterId: 'user-1',
+          requesterName: '學良',
+          requesterEmail: 'garden@example.com',
+          addresseeId: 'accepted-friend',
+          addresseeName: '已接受好友',
+          addresseeEmail: 'accepted@example.com',
+          addresseeStatus: '可以看到貼文',
+          addresseeTone: 'green',
+          friendshipStatus: 'accepted',
+        },
+        {
+          id: 'friendship-pending',
+          requesterId: 'user-1',
+          requesterName: '學良',
+          requesterEmail: 'garden@example.com',
+          addresseeId: 'pending-friend',
+          addresseeName: '待接受好友',
+          addresseeEmail: 'pending@example.com',
+          addresseeStatus: '還沒接受',
+          addresseeTone: 'amber',
+          friendshipStatus: 'pending',
+        },
+      ],
+    })
+    await renderAuthenticatedApp()
+
+    await user.click(screen.getByRole('button', { name: '聊天' }))
+    await user.click(screen.getByRole('button', { name: '發一則貼文' }))
+    await user.type(screen.getByLabelText('貼文內容'), '給真正好友看的近況')
+    await user.click(screen.getByRole('button', { name: '儲存貼文' }))
+
+    expect(apiMocks.callApi).toHaveBeenCalledWith(
+      'POST',
+      '/chat-posts',
+      expect.objectContaining({
+        text: '給真正好友看的近況',
+        visibleToUserIds: ['accepted-friend'],
+      }),
+    )
+  })
+
   it('gives album photo upload a clear per-album entry point', async () => {
     const user = userEvent.setup()
     await renderAuthenticatedApp()

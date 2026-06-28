@@ -487,6 +487,10 @@ function App() {
   const [chatPosts, setChatPosts] = useState<ChatFeedPost[]>([])
   const [activeChatThreadId, setActiveChatThreadId] = useState('')
   const [chatActiveTab, setChatActiveTab] = useState<string>('全部')
+  const acceptedWorkspaceFriends = useMemo(
+    () => workspaceFriends.filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus),
+    [workspaceFriends],
+  )
 
   const syncCreateRecord = <T,>(path: string, record: T) => {
     if (!hasRemoteSession) return
@@ -1337,9 +1341,7 @@ function App() {
 
   const handleCreateChatPost = (post: ChatFeedPost) => {
     if (!authUser) return
-    const acceptedFriendIds = workspaceFriends
-      .filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus)
-      .map(f => f.id)
+    const acceptedFriendIds = acceptedWorkspaceFriends.map(f => f.id)
     const postPayload = {
       ...post,
       author: authUser.name || '我',
@@ -1351,9 +1353,7 @@ function App() {
 
   const handleUpdateChatPost = (postId: string, post: Partial<ChatFeedPost>) => {
     if (!authUser) return
-    const acceptedFriendIds = workspaceFriends
-      .filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus)
-      .map(f => f.id)
+    const acceptedFriendIds = acceptedWorkspaceFriends.map(f => f.id)
     const updatedComments = post.comments?.map(c => {
       if (c.author === '我') {
         return { ...c, author: authUser.name || '我' }
@@ -1465,7 +1465,7 @@ function App() {
             folders={workspaceFolders}
             notes={workspaceNotes}
             photos={workspacePhotos}
-            friends={workspaceFriends}
+            friends={acceptedWorkspaceFriends}
             events={workspaceEvents}
             onNavigate={(section, folderId) => {
               setActiveSection(section)
@@ -1577,7 +1577,7 @@ function App() {
 
       {showRightRail ? (
         <aside className="right-rail" aria-label="右側好友與相簿" style={{ display: 'none' }}>
-          <FriendsPanel friends={workspaceFriends} onStartChat={handleStartChat} />
+          <FriendsPanel friends={acceptedWorkspaceFriends} onStartChat={handleStartChat} />
           <RightRailWidgets />
         </aside>
       ) : null}
@@ -1853,7 +1853,7 @@ function App() {
       {callingFriendId && (
         <CallingModal
           friendId={callingFriendId}
-          friends={workspaceFriends}
+          friends={acceptedWorkspaceFriends}
           onClose={() => setCallingFriendId(null)}
         />
       )}
@@ -4264,30 +4264,13 @@ function FriendsPage({
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
   const [editingGroupName, setEditingGroupName] = useState('')
 
-  // Sync selection when activeTab changes
-  useEffect(() => {
-    queueMicrotask(() => {
-      if (activeTab === '群組') {
-        if (!selectedGroupId && groups.length > 0) {
-          setSelectedGroupId(groups[0].id)
-        }
-        setSelectedFriendId('') // clear friend highlight
-      } else {
-        setSelectedGroupId(null)
-        if (!selectedFriendId && friends.length > 0) {
-          setSelectedFriendId(friends[0].id)
-        }
-      }
-      setIsEditingGroups(false)
-    })
-  }, [activeTab, groups, friends, selectedGroupId, selectedFriendId])
-
-  const activeFriend = friends.find((f) => f.id === selectedFriendId) ?? friends[0]
-  const activeGroup = groups.find((g) => g.id === selectedGroupId)
+  const acceptedFriends = useMemo(() => {
+    return friends.filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus)
+  }, [friends])
 
   // Filtered and sorted friends list: Starred置頂
   const filteredFriends = useMemo(() => {
-    let list = friends.filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus)
+    let list = acceptedFriends
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
       list = list.filter(
@@ -4301,7 +4284,7 @@ function FriendsPage({
       const bStar = b.isStarred ? 1 : 0
       return bStar - aStar
     })
-  }, [friends, searchQuery])
+  }, [acceptedFriends, searchQuery])
 
   const pendingInvites = useMemo(() => {
     return friends.filter(f => f.friendshipStatus === 'pending')
@@ -4315,6 +4298,36 @@ function FriendsPage({
     }
     return list
   }, [groups, searchQuery])
+
+  // Sync selection when activeTab changes
+  useEffect(() => {
+    queueMicrotask(() => {
+      if (activeTab === '群組') {
+        if (!selectedGroupId && groups.length > 0) {
+          setSelectedGroupId(groups[0].id)
+        }
+        setSelectedFriendId('')
+      } else if (activeTab === '邀請') {
+        setSelectedGroupId(null)
+        if (!selectedFriendId && pendingInvites.length > 0) {
+          setSelectedFriendId(pendingInvites[0].id)
+        }
+      } else {
+        setSelectedGroupId(null)
+        if (filteredFriends.length === 0) {
+          setSelectedFriendId('')
+        } else if (!selectedFriendId || !filteredFriends.some((friend) => friend.id === selectedFriendId)) {
+          setSelectedFriendId(filteredFriends[0].id)
+        }
+      }
+      setIsEditingGroups(false)
+    })
+  }, [activeTab, filteredFriends, groups, pendingInvites, selectedGroupId, selectedFriendId])
+
+  const activeFriend = activeTab === '邀請'
+    ? undefined
+    : (filteredFriends.find((f) => f.id === selectedFriendId) ?? filteredFriends[0])
+  const activeGroup = groups.find((g) => g.id === selectedGroupId)
 
   const getFriendGroups = (friendId: string) => {
     return groups.filter((g) => g.memberIds.includes(friendId))
@@ -4833,7 +4846,7 @@ function FriendsPage({
                     <h4>群組成員 ({activeGroup.memberIds.length}人)</h4>
                     <div className="group-members-list-grid">
                       {activeGroup.memberIds.map((id) => {
-                        const member = friends.find((f) => f.id === id)
+                        const member = acceptedFriends.find((f) => f.id === id)
                         if (!member) return null
                         return (
                           <div key={member.id} className="group-member-item-row">
@@ -4872,7 +4885,7 @@ function FriendsPage({
                   <div className="group-add-member-section">
                     <h4>新增成員</h4>
                     {(() => {
-                      const nonMembers = friends.filter(
+                      const nonMembers = acceptedFriends.filter(
                         (f) => !activeGroup.memberIds.includes(f.id),
                       )
                       return nonMembers.length > 0 ? (
@@ -5149,7 +5162,9 @@ function FriendsPage({
 
             return (
               <div className="chat-empty-state">
-                請從左側列表選取一位好友或群組。
+                {activeTab === '群組'
+                  ? '請從左側列表選取一個群組。'
+                  : '目前沒有已接受的好友，先從「邀請」分頁新增或接受好友。'}
               </div>
             )
           })()}
