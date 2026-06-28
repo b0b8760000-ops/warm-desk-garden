@@ -218,6 +218,7 @@ function App() {
   const [workspaceGroups, setWorkspaceGroups] = useState<FriendGroup[]>([])
   const [workspaceEvents, setWorkspaceEvents] = useState<CalendarEvent[]>([])
   const [workspaceTasks, setWorkspaceTasks] = useState<CalendarTask[]>([])
+  const [hasRemoteSession, setHasRemoteSession] = useState(false)
 
   const [chatThreads, setChatThreads] = useState<ChatThread[]>([])
   const [chatPosts, setChatPosts] = useState<ChatFeedPost[]>([])
@@ -225,18 +226,24 @@ function App() {
   const [chatActiveTab, setChatActiveTab] = useState<string>('全部')
 
   const syncCreateRecord = <T,>(path: string, record: T) => {
+    if (!hasRemoteSession) return
+
     void createWorkspaceRecord(path, record).catch((error) => {
       console.warn(`Failed to create ${path} record.`, error)
     })
   }
 
   const syncUpdateRecord = <T,>(path: string, id: string, patch: Partial<T>) => {
+    if (!hasRemoteSession) return
+
     void updateWorkspaceRecord(path, id, patch).catch((error) => {
       console.warn(`Failed to update ${path} record.`, error)
     })
   }
 
   const syncDeleteRecord = (path: string, id: string) => {
+    if (!hasRemoteSession) return
+
     void deleteWorkspaceRecord(path, id).catch((error) => {
       console.warn(`Failed to delete ${path} record.`, error)
     })
@@ -521,6 +528,7 @@ function App() {
       try {
         const user = await appwriteAccount.get()
         if (user) {
+          setHasRemoteSession(true)
           if (user.name) {
             setUserName(user.name)
           } else if (user.email) {
@@ -528,6 +536,7 @@ function App() {
           }
         }
       } catch {
+        setHasRemoteSession(false)
         console.log('Appwrite session not found or not configured, using fallback name.')
       }
     }
@@ -538,6 +547,10 @@ function App() {
     let cancelled = false
 
     async function loadWorkspace() {
+      if (!hasRemoteSession) {
+        return
+      }
+
       try {
         const snapshot = await loadWorkspaceSnapshot()
         if (!snapshot || cancelled) return
@@ -560,7 +573,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [hasRemoteSession])
 
   const handleBgFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
