@@ -3,6 +3,17 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
+const apiMocks = vi.hoisted(() => {
+  return {
+    callApi: vi.fn(),
+  }
+})
+
+vi.mock('./services/apiClient', () => ({
+  callApi: apiMocks.callApi,
+  isApiConfigured: true,
+}))
+
 const authMocks = vi.hoisted(() => {
   const defaultUser = { id: 'user-1', email: 'garden@example.com', name: '學良' }
 
@@ -31,12 +42,17 @@ beforeEach(() => {
   authMocks.registerWithEmail.mockReset()
   authMocks.signOut.mockReset()
   authMocks.uploadUserFileForDisplay.mockReset()
+  apiMocks.callApi.mockReset()
 
   authMocks.getCurrentUser.mockResolvedValue(authMocks.defaultUser)
   authMocks.signInWithEmail.mockResolvedValue(authMocks.defaultUser)
   authMocks.registerWithEmail.mockResolvedValue(authMocks.defaultUser)
   authMocks.signOut.mockResolvedValue(undefined)
   authMocks.uploadUserFileForDisplay.mockRejectedValue(new Error('Storage unavailable in tests.'))
+
+  apiMocks.callApi.mockImplementation((method: string, path: string, payload?: any) => {
+    return Promise.resolve(null)
+  })
 })
 
 async function renderAuthenticatedApp() {
@@ -59,10 +75,34 @@ async function createFolderAndOpen(user: ReturnType<typeof userEvent.setup>, nam
 }
 
 async function createFriend(user: ReturnType<typeof userEvent.setup>, name = '聊天朋友') {
+  apiMocks.callApi.mockImplementation((method: string, path: string, payload?: any) => {
+    if (method === 'GET' && path.startsWith('/profiles/search')) {
+      return Promise.resolve({
+        id: 'friend-12345',
+        name: name,
+        email: 'friend@example.com',
+        avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
+        status: '最近在練習早起',
+        tone: 'green'
+      })
+    }
+    if (method === 'POST' && path === '/friends') {
+      return Promise.resolve({
+        id: 'friendship-12345',
+        requesterId: 'user-123',
+        addresseeId: 'friend-12345',
+        friendshipStatus: 'accepted'
+      })
+    }
+    return Promise.resolve(null)
+  })
+
   await user.click(screen.getByRole('button', { name: '好友' }))
   await user.click(screen.getAllByRole('button', { name: '邀請好友' })[0])
-  await user.type(screen.getByLabelText('好友姓名 (必填)'), name)
-  await user.click(screen.getByRole('button', { name: '確認加入' }))
+  await user.type(screen.getByPlaceholderText('friend@example.com'), 'friend@example.com')
+  await user.click(screen.getByRole('button', { name: '搜尋' }))
+  await user.click(screen.getByRole('button', { name: '加為好友 ➕' }))
+  await user.click(screen.getByRole('button', { name: '關閉' }))
 }
 
 describe('Warm Desk Garden app shell', () => {
@@ -708,13 +748,38 @@ describe('Warm Desk Garden app shell', () => {
     const user = userEvent.setup()
     await renderAuthenticatedApp()
 
+    apiMocks.callApi.mockImplementation((method: string, path: string, payload?: any) => {
+      if (method === 'GET' && path.startsWith('/profiles/search')) {
+        return Promise.resolve({
+          id: 'friend-456',
+          name: '新朋友',
+          email: 'newfriend@example.com',
+          avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
+          status: '最近在練習早起',
+          tone: 'green'
+        })
+      }
+      if (method === 'POST' && path === '/friends') {
+        return Promise.resolve({
+          id: 'friendship-789',
+          requesterId: 'user-123',
+          addresseeId: 'friend-456',
+          friendshipStatus: 'accepted'
+        })
+      }
+      return Promise.resolve(null)
+    })
+
     await user.click(screen.getByRole('button', { name: '好友' }))
     await user.click(screen.getAllByRole('button', { name: '邀請好友' })[0])
 
-    expect(screen.getByText('邀請好友加入手札 ✏️')).toBeInTheDocument()
-    await user.type(screen.getByLabelText('好友姓名 (必填)'), '新朋友')
-    await user.click(screen.getByRole('button', { name: '確認加入' }))
-    expect(screen.getAllByText('新朋友').length).toBeGreaterThan(0)
+    expect(screen.getByText('🔍 尋找真實好友')).toBeInTheDocument()
+    await user.type(screen.getByPlaceholderText('friend@example.com'), 'newfriend@example.com')
+    await user.click(screen.getByRole('button', { name: '搜尋' }))
+    
+    expect(screen.getByText('新朋友')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '加為好友 ➕' }))
+    await user.click(screen.getByRole('button', { name: '關閉' }))
   })
 
   it('gives album photo upload a clear per-album entry point', async () => {

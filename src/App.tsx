@@ -528,55 +528,7 @@ function App() {
     )
   }
 
-  const handleCreateFriend = (
-    name: string,
-    status: string,
-    tone: 'green' | 'amber' | 'gray',
-    groupIds: string[],
-  ) => {
-    const friendId = `friend-${Date.now()}`
-    const avatarUrl = `https://images.unsplash.com/photo-${
-      ['1507525428034-b723cf961d3e', '1528164344705-47542687000d', '1503899036084-c55cdd92da26', '1516690561799-46d8f74f9abf'][
-        Math.floor(Math.random() * 4)
-      ]
-    }?auto=format&fit=crop&w=120&q=80`
 
-    const newFriend: Friend = {
-      id: friendId,
-      name,
-      status: status.trim() || '最近在練習早起',
-      avatarUrl,
-      tone,
-    }
-
-    setWorkspaceFriends((prev) => [...prev, newFriend])
-    syncCreateRecord('friends', newFriend)
-
-    if (groupIds.length > 0) {
-      setWorkspaceGroups((prev) =>
-        prev.map((g) =>
-          groupIds.includes(g.id) ? { ...g, memberIds: [...g.memberIds, friendId] } : g,
-        ),
-      )
-    }
-
-    const newThread: ChatThread = {
-      id: friendId,
-      name,
-      type: 'direct',
-      avatarUrl,
-      messages: [
-        {
-          id: `msg-${Date.now()}`,
-          author: name,
-          text: '你好，很高興認識你！我們的共通聊天室已啟用。',
-          time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
-        },
-      ],
-    }
-    setChatThreads((prev) => [...prev, newThread])
-    setActiveChatThreadId(friendId)
-  }
 
   const handleAcceptInvite = async (friendshipId: string) => {
     try {
@@ -680,10 +632,33 @@ function App() {
         tone: profile.tone || 'green',
         isStarred: false,
         friendshipId: createdFriendship.id,
-        friendshipStatus: 'pending',
+        friendshipStatus: createdFriendship.friendshipStatus || 'pending',
         isIncoming: false
       }
       setWorkspaceFriends(prev => [...prev, newFriend])
+
+      // If friendship is already accepted (e.g. mock tests or instant matches), auto-create chat thread
+      if (createdFriendship.friendshipStatus === 'accepted') {
+        const newThread: ChatThread = {
+          id: profile.id,
+          name: profile.name,
+          type: 'direct',
+          avatarUrl: profile.avatarUrl,
+          messages: [
+            {
+              id: `msg-${Date.now()}`,
+              author: profile.name,
+              text: '你好，很高興認識你！我們的共通聊天室已啟用。',
+              time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
+            }
+          ]
+        }
+        setChatThreads(prev => {
+          if (prev.some(t => t.id === profile.id)) return prev
+          return [...prev, newThread]
+        })
+        setActiveChatThreadId(profile.id)
+      }
       return true
     } catch (err) {
       console.error('Failed to send friend request:', err)
@@ -1572,35 +1547,7 @@ function App() {
             </div>
 
             <div className="settings-group">
-              <label style={{ fontWeight: 'bold', color: '#48341f', marginBottom: '8px', display: 'block' }}>選取頭像預設值</label>
-              <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-                {[
-                  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
-                  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&h=150',
-                  'https://images.unsplash.com/photo-1599566150163-29194dcaad36?auto=format&fit=crop&w=150&h=150',
-                  'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=150&h=150',
-                  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&h=150'
-                ].map((presetUrl, idx) => (
-                  <button
-                    key={presetUrl}
-                    type="button"
-                    style={{
-                      padding: 0,
-                      background: 'transparent',
-                      border: userAvatarUrl === presetUrl ? '3px solid #877864' : '1px solid #d3c4a9',
-                      borderRadius: '50%',
-                      cursor: 'pointer',
-                      width: '40px',
-                      height: '40px',
-                      overflow: 'hidden'
-                    }}
-                    onClick={() => setUserAvatarUrl(presetUrl)}
-                  >
-                    <img src={presetUrl} alt={`預設頭像 ${idx + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </button>
-                ))}
-              </div>
-              <label htmlFor="settings-avatar-url" style={{ fontSize: '12px', color: '#7a6a53' }}>或輸入自訂頭像圖片網址</label>
+              <label htmlFor="settings-avatar-url" style={{ fontSize: '12px', fontWeight: 'bold', color: '#48341f' }}>個人頭像圖片網址</label>
               <input
                 id="settings-avatar-url"
                 type="text"
@@ -1816,9 +1763,8 @@ function App() {
 
       {showAddFriendModal && (
         <AddFriendModal
-          groups={workspaceGroups}
           onClose={() => setShowAddFriendModal(false)}
-          onCreateFriend={handleCreateFriend}
+          onSendInvite={handleSendInvite}
         />
       )}
 
@@ -6312,122 +6258,165 @@ function CallingModal({
 }
 
 function AddFriendModal({
-  groups,
   onClose,
-  onCreateFriend,
+  onSendInvite,
 }: {
-  groups: FriendGroup[]
   onClose: () => void
-  onCreateFriend: (
-    name: string,
-    status: string,
-    tone: 'green' | 'amber' | 'gray',
-    groupIds: string[],
-  ) => void
+  onSendInvite: (email: string) => Promise<boolean>
 }) {
-  const [name, setName] = useState('')
-  const [status, setStatus] = useState('')
-  const [tone, setTone] = useState<'green' | 'amber' | 'gray'>('green')
-  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
+  const [email, setEmail] = useState('')
+  const [searchResult, setSearchResult] = useState<any | null>(null)
+  const [searchError, setSearchError] = useState('')
+  const [isSearching, setIsSearching] = useState(false)
+  const [isSending, setIsSending] = useState(false)
+  const [sentSuccess, setSentSuccess] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name.trim()) return
-    onCreateFriend(name.trim(), status.trim(), tone, selectedGroupIds)
-    onClose()
+    if (!email.trim()) return
+    setIsSearching(true)
+    setSearchError('')
+    setSearchResult(null)
+    setSentSuccess(false)
+    try {
+      const result = await callApi<any>('GET', `/profiles/search?email=${encodeURIComponent(email.trim())}`)
+      if (result) {
+        setSearchResult(result)
+      } else {
+        setSearchError('找不到該使用者，請確認 Email 是否輸入正確。')
+      }
+    } catch (err) {
+      console.error('Search user failed:', err)
+      setSearchError('搜尋時發生錯誤，請稍後再試。')
+    } finally {
+      setIsSearching(false)
+    }
   }
 
-  const toggleGroup = (groupId: string) => {
-    setSelectedGroupIds((prev) =>
-      prev.includes(groupId) ? prev.filter((id) => id !== groupId) : [...prev, groupId],
-    )
+  const handleSend = async () => {
+    if (!searchResult) return
+    setIsSending(true)
+    try {
+      const ok = await onSendInvite(searchResult.email)
+      if (ok) {
+        setSentSuccess(true)
+        setSearchResult(null)
+        setEmail('')
+      } else {
+        alert('傳送好友邀請失敗，可能已是好友或已有待處理邀請。')
+      }
+    } catch (err) {
+      console.error('Send invite failed:', err)
+      alert('傳送好友邀請時發生錯誤。')
+    } finally {
+      setIsSending(false)
+    }
   }
 
   return (
     <div className="add-friend-overlay" onClick={onClose} role="dialog" aria-modal="true">
-      <form className="add-friend-card" onClick={(e) => e.stopPropagation()} onSubmit={handleSubmit}>
+      <div className="add-friend-card" onClick={(e) => e.stopPropagation()} style={{ width: '400px', maxWidth: '90%' }}>
         <div className="card-lined-header">
-          <h3>邀請好友加入手札 ✏️</h3>
+          <h3>🔍 尋找真實好友</h3>
           <button type="button" className="close-x-btn" onClick={onClose}>
             ✕
           </button>
         </div>
 
-        <div className="form-group-lined">
-          <label htmlFor="friend-form-name">好友姓名 (必填)</label>
-          <input
-            id="friend-form-name"
-            type="text"
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="例如：小明"
-            maxLength={10}
-          />
-        </div>
-
-        <div className="form-group-lined">
-          <label htmlFor="friend-form-status">個人近況 / 狀態</label>
-          <input
-            id="friend-form-status"
-            type="text"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            placeholder="例如：專注工作中..."
-            maxLength={30}
-          />
-        </div>
-
-        <div className="form-group-lined">
-          <label>在線狀態類型</label>
-          <div className="tone-selector-row">
-            {(['green', 'amber', 'gray'] as const).map((t) => (
-              <label key={t} className={`tone-option-label ${tone === t ? 'active' : ''}`}>
-                <input
-                  type="radio"
-                  name="friend-tone"
-                  checked={tone === t}
-                  onChange={() => setTone(t)}
-                  style={{ display: 'none' }}
-                />
-                <span className={`status-dot ${t}`} />
-                <span>{t === 'green' ? '🟢 在線' : t === 'amber' ? '🟡 忙碌' : '⚪ 離線'}</span>
-              </label>
-            ))}
+        <form onSubmit={handleSearch} style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '15px' }}>
+          <label htmlFor="friend-search-email" style={{ fontSize: '13px', fontWeight: 'bold', color: '#48341f' }}>輸入好友的 Email：</label>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              id="friend-search-email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="friend@example.com"
+              style={{
+                flex: 1,
+                background: 'transparent',
+                border: 'none',
+                borderBottom: '2px solid #d3c4a9',
+                padding: '8px 0',
+                fontSize: '14px',
+                outline: 'none',
+                color: '#48341f'
+              }}
+            />
+            <button
+              type="submit"
+              disabled={isSearching}
+              style={{
+                padding: '8px 16px',
+                background: '#877864',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                fontSize: '13px',
+                cursor: 'pointer',
+                fontWeight: 'bold'
+              }}
+            >
+              {isSearching ? '搜尋中...' : '搜尋'}
+            </button>
           </div>
-        </div>
+        </form>
 
-        <div className="form-group-lined">
-          <label>歸屬群組 (可複選)</label>
-          <div className="groups-checkbox-container-wrap">
-            {groups.map((g) => (
-              <label key={g.id} className="group-chk-option" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#48341f', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={selectedGroupIds.includes(g.id)}
-                  onChange={() => toggleGroup(g.id)}
-                />
-                <span>{g.name}</span>
-              </label>
-            ))}
-            {groups.length === 0 && <span className="no-groups-hint">目前無群組，可新增群組後再設定</span>}
+        {searchError && (
+          <div style={{ padding: '10px', background: 'rgba(177, 93, 93, 0.05)', color: '#b15d5d', borderRadius: '4px', fontSize: '12px', border: '1px solid rgba(177, 93, 93, 0.15)', marginTop: '15px' }}>
+            ⚠️ {searchError}
           </div>
-        </div>
+        )}
 
-        <div className="form-actions-line">
-          <button type="button" className="btn-paper-cancel" onClick={onClose}>
-            取消
-          </button>
-          <button type="submit" className="btn-paper-submit" disabled={!name.trim()}>
-            確認加入
+        {sentSuccess && (
+          <div style={{ padding: '12px', background: 'rgba(92, 124, 89, 0.05)', color: '#4d694b', borderRadius: '4px', fontSize: '13px', border: '1px solid rgba(92, 124, 89, 0.15)', fontWeight: 'bold', marginTop: '15px' }}>
+            🎉 好友邀請已成功送出！請等待對方核准。
+          </div>
+        )}
+
+        {searchResult && (
+          <div className="search-result-card" style={{ marginTop: '20px', padding: '15px', background: '#fcfaf6', border: '1px solid #d3c4a9', borderRadius: '6px', boxShadow: '0 2px 5px rgba(0,0,0,0.03)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <img src={searchResult.avatarUrl} alt="" style={{ width: '45px', height: '45px', borderRadius: '50%', objectFit: 'cover' }} />
+              <div style={{ flex: 1 }}>
+                <h4 style={{ margin: '0', fontSize: '15px', color: '#48341f' }}>{searchResult.name}</h4>
+                <span style={{ fontSize: '11px', color: '#7a6a53' }}>{searchResult.email}</span>
+                <div style={{ fontSize: '12px', color: '#7a6a53', marginTop: '4px' }}>
+                  <span className={`status-dot ${searchResult.tone}`} style={{ marginRight: '6px' }} />
+                  {searchResult.status}
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isSending}
+                onClick={handleSend}
+                style={{
+                  padding: '8px 12px',
+                  background: '#5c7c59',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  fontWeight: 'bold'
+                }}
+              >
+                {isSending ? '傳送中...' : '加為好友 ➕'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="form-actions-line" style={{ marginTop: '20px', borderTop: '1px solid #e6dec9', paddingTop: '15px', display: 'flex', justifyContent: 'flex-end' }}>
+          <button type="button" className="btn-paper-cancel" onClick={onClose} style={{ background: 'transparent', border: '1px solid #d3c4a9', color: '#73614e', padding: '6px 15px', borderRadius: '4px', cursor: 'pointer' }}>
+            關閉
           </button>
         </div>
-      </form>
+      </div>
     </div>
   )
 }
-
-
 
 /* === SlideshowModal === */
 function SlideshowModal({
