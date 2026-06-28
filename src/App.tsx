@@ -653,17 +653,18 @@ function App() {
 
       // 4. Create friendship request in MongoDB
       const friendshipPayload = {
+        requesterId: authUser.id,
+        requesterName: authUser.name,
+        requesterEmail: authUser.email,
+        requesterAvatarUrl: userAvatarUrl,
+        requesterStatus: userStatus,
+        requesterTone: userTone,
         addresseeId: profile.id,
         addresseeName: profile.name,
         addresseeEmail: profile.email,
         addresseeAvatarUrl: profile.avatarUrl,
         addresseeStatus: profile.status || '用手札記錄生活 ✏️',
         addresseeTone: profile.tone || 'green',
-        requesterName: authUser.name,
-        requesterEmail: authUser.email,
-        requesterAvatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
-        requesterStatus: '專注生活中...',
-        requesterTone: 'green',
         friendshipStatus: 'pending'
       }
 
@@ -679,7 +680,8 @@ function App() {
         tone: profile.tone || 'green',
         isStarred: false,
         friendshipId: createdFriendship.id,
-        friendshipStatus: 'pending'
+        friendshipStatus: 'pending',
+        isIncoming: false
       }
       setWorkspaceFriends(prev => [...prev, newFriend])
       return true
@@ -1007,9 +1009,11 @@ function App() {
         // Map raw friendships from MongoDB to Friend objects
         const rawFriendships = snapshot.friends as any[]
         const formattedFriends = rawFriendships.map(f => {
-          const isRequester = f.requesterId === authUser.id
+          const isRequester = f.requesterId 
+            ? (f.requesterId === authUser.id) 
+            : (f.requesterEmail?.toLowerCase() === authUser.email.toLowerCase())
           return {
-            id: isRequester ? f.addresseeId : f.requesterId,
+            id: isRequester ? f.addresseeId : (f.requesterId || f.id),
             name: isRequester ? f.addresseeName : f.requesterName,
             status: isRequester ? (f.addresseeStatus ?? '') : (f.requesterStatus ?? ''),
             avatarUrl: isRequester 
@@ -1604,6 +1608,31 @@ function App() {
                 onChange={(e) => setUserAvatarUrl(e.target.value)}
                 placeholder="https://example.com/avatar.jpg"
                 style={{ width: '100%', marginTop: '4px' }}
+              />
+            </div>
+
+            <div className="settings-group">
+              <label htmlFor="settings-upload-avatar" style={{ fontSize: '13px', fontWeight: 'bold', color: '#48341f' }}>上傳個人頭像照片</label>
+              <input
+                id="settings-upload-avatar"
+                type="file"
+                accept="image/*"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  try {
+                    setIsSavingSettings(true)
+                    const uploadedUrl = await uploadUserFileForDisplay(file)
+                    setUserAvatarUrl(uploadedUrl)
+                    alert('頭像圖片上傳成功！')
+                  } catch (err) {
+                    console.error('Failed to upload avatar:', err)
+                    alert('上傳頭像失敗，請確認是否配置 Appwrite Bucket 或網路狀態。')
+                  } finally {
+                    setIsSavingSettings(false)
+                  }
+                }}
+                style={{ padding: '4px', width: '100%', marginTop: '4px' }}
               />
             </div>
 

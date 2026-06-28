@@ -4,6 +4,7 @@ import type { Request, Response, NextFunction } from 'express'
 export type CurrentUser = {
   id: string
   email: string
+  name?: string
 }
 
 export type AuthenticatedRequest = Request & {
@@ -32,7 +33,7 @@ export async function getCurrentUserFromRequest(req: Request): Promise<CurrentUs
     const client = new Client().setEndpoint(endpoint).setProject(projectId).setJWT(jwt)
     const account = new Account(client)
     const user = await account.get()
-    return { id: user.$id, email: user.email }
+    return { id: user.$id, email: user.email, name: user.name }
   }
 
   const devUserId = req.headers['x-dev-user-id']
@@ -44,7 +45,7 @@ export async function getCurrentUserFromRequest(req: Request): Promise<CurrentUs
     const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey)
     const users = new Users(client)
     const user = await users.get(req.headers['x-appwrite-user-id'])
-    return { id: user.$id, email: user.email }
+    return { id: user.$id, email: user.email, name: user.name }
   }
 
   throw Object.assign(new Error('Authentication required.'), { status: 401 })

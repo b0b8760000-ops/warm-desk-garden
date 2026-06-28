@@ -38,6 +38,64 @@ apiRouter.get('/me', (req, res) => {
   res.json({ id: user.id, email: user.email })
 })
 
+apiRouter.post('/profiles', async (req, res) => {
+  try {
+    const db = await getDb()
+    const user = (req as unknown as AuthenticatedRequest).currentUser
+    const body = req.body
+
+    const profile = {
+      userId: user.id,
+      name: body.name ?? user.name ?? '',
+      email: user.email.toLowerCase(),
+      avatarUrl: body.avatarUrl ?? `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150`,
+      status: body.status ?? '用手札記錄生活 ✏️',
+      tone: body.tone ?? 'green',
+      updatedAt: new Date().toISOString()
+    }
+
+    await db.collection(collections.profiles).updateOne(
+      { userId: user.id },
+      { 
+        $set: profile, 
+        $setOnInsert: { createdAt: new Date().toISOString() } 
+      },
+      { upsert: true }
+    )
+    res.json(profile)
+  } catch (err) {
+    console.error('Failed to update profile:', err)
+    res.status(500).json({ error: 'Failed to update profile' })
+  }
+})
+
+apiRouter.get('/profiles/search', async (req, res) => {
+  try {
+    const db = await getDb()
+    const searchEmail = String(req.query.email || '').trim().toLowerCase()
+    if (!searchEmail) {
+      res.status(400).json({ error: 'Email is required' })
+      return
+    }
+    const profile = await db.collection(collections.profiles).findOne({ email: searchEmail })
+    if (!profile) {
+      res.json(null)
+      return
+    }
+    res.json({
+      id: profile.userId,
+      name: profile.name,
+      email: profile.email,
+      avatarUrl: profile.avatarUrl,
+      status: profile.status,
+      tone: profile.tone
+    })
+  } catch (err) {
+    console.error('Search profile failed:', err)
+    res.status(500).json({ error: 'Search profile failed' })
+  }
+})
+
 apiRouter.all('*path', async (req, res, next) => {
   try {
     const db = await getDb()
