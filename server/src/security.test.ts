@@ -90,6 +90,17 @@ describe('backend security helpers', () => {
     ).toEqual({ title: 'Updated event' })
   })
 
+  it('allows friendship status transitions without exposing relationship ownership', () => {
+    expect(
+      sanitizeWorkspacePatch(collections.friendships, {
+        friendshipStatus: 'accepted',
+        requesterId: 'attacker',
+        addresseeId: 'other-user',
+        createdAt: '2020-01-01T00:00:00.000Z',
+      }),
+    ).toEqual({ friendshipStatus: 'accepted' })
+  })
+
   it('targets chat realtime delivery to the owner and explicitly visible users only', () => {
     expect(
       chatPostRooms({

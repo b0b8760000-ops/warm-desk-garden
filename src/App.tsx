@@ -114,7 +114,46 @@ type ChatPostDraft = {
   images: string[]
 }
 
+type FriendTone = Friend['tone']
+
+type UserProfile = {
+  id: string
+  name: string
+  email: string
+  avatarUrl?: string
+  status?: string
+  tone?: FriendTone
+}
+
+type FriendshipRecord = {
+  id?: string
+  requesterId?: string
+  requesterName?: string
+  requesterEmail?: string
+  requesterAvatarUrl?: string
+  requesterStatus?: string
+  requesterTone?: FriendTone
+  addresseeId?: string
+  addresseeName?: string
+  addresseeEmail?: string
+  addresseeAvatarUrl?: string
+  addresseeStatus?: string
+  addresseeTone?: FriendTone
+  isStarred?: boolean
+  friendshipStatus?: Friend['friendshipStatus']
+}
+
+type StoredChatPost = ChatFeedPost & {
+  ownerId?: string
+}
+
 type AuthStatus = 'checking' | 'guest' | 'authenticated'
+
+const statusToneOptions: Array<{ value: FriendTone; label: string }> = [
+  { value: 'green', label: '🟢 在線' },
+  { value: 'amber', label: '🟡 忙碌' },
+  { value: 'gray', label: '⚫ 離線' },
+]
 
 const DB_NAME = 'warm-desk-garden-db'
 const STORE_NAME = 'settings'
@@ -516,7 +555,62 @@ function App() {
     )
   }
 
+  const createDirectChatThread = (friend: Friend): ChatThread => ({
+    id: friend.id,
+    name: friend.name,
+    type: 'direct',
+    avatarUrl: friend.avatarUrl,
+    messages: [
+      {
+        id: `msg-${Date.now()}-${friend.id}`,
+        author: friend.name,
+        text: '你好，很高興認識你！我們的共通聊天室已啟用。',
+        time: '剛剛',
+      },
+    ],
+  })
+
+  const createGroupChatThread = (group: FriendGroup): ChatThread => ({
+    id: group.id,
+    name: group.name,
+    type: 'group',
+    messages: [
+      {
+        id: `msg-${Date.now()}-${group.id}`,
+        author: '系統',
+        text: `「${group.name}」群組聊天室已建立。`,
+        time: '剛剛',
+      },
+    ],
+  })
+
+  const ensureChatThreadForTarget = (targetId: string) => {
+    const targetFriend = workspaceFriends.find((friend) => friend.id === targetId)
+    if (targetFriend) {
+      if (targetFriend.friendshipStatus === 'pending') return false
+      setChatThreads((prev) =>
+        prev.some((thread) => thread.id === targetId)
+          ? prev
+          : [...prev, createDirectChatThread(targetFriend)],
+      )
+      return true
+    }
+
+    const targetGroup = workspaceGroups.find((group) => group.id === targetId)
+    if (targetGroup) {
+      setChatThreads((prev) =>
+        prev.some((thread) => thread.id === targetId)
+          ? prev
+          : [...prev, createGroupChatThread(targetGroup)],
+      )
+      return true
+    }
+
+    return chatThreads.some((thread) => thread.id === targetId)
+  }
+
   const handleStartChat = (targetId: string) => {
+    if (!ensureChatThreadForTarget(targetId)) return
     setActiveChatThreadId(targetId)
     setChatActiveTab('聊天室')
     setActiveSection('聊天')
@@ -532,7 +626,7 @@ function App() {
 
   const handleAcceptInvite = async (friendshipId: string) => {
     try {
-      const updated = await updateWorkspaceRecord<any>('friends', friendshipId, {
+      const updated = await updateWorkspaceRecord<FriendshipRecord>('friends', friendshipId, {
         friendshipStatus: 'accepted'
       })
       if (!updated) return
@@ -542,26 +636,11 @@ function App() {
         prev.map((f) => (f.friendshipId === friendshipId ? { ...f, friendshipStatus: 'accepted' } : f))
       )
 
-      // Create a chat thread for this friend
       const targetFriend = workspaceFriends.find(f => f.friendshipId === friendshipId)
       if (targetFriend) {
-        const newThread: ChatThread = {
-          id: targetFriend.id,
-          name: targetFriend.name,
-          type: 'direct',
-          avatarUrl: targetFriend.avatarUrl,
-          messages: [
-            {
-              id: `msg-${Date.now()}`,
-              author: targetFriend.name,
-              text: '你好，很高興認識你！我們的共通聊天室已啟用。',
-              time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
-            },
-          ],
-        }
         setChatThreads((prev) => {
           if (prev.some(t => t.id === targetFriend.id)) return prev
-          return [...prev, newThread]
+          return [...prev, createDirectChatThread(targetFriend)]
         })
       }
     } catch (err) {
@@ -586,7 +665,7 @@ function App() {
     if (!authUser) return false
     try {
       // 1. Search for profile by email
-      const profile = await callApi<any>('GET', `/profiles/search?email=${encodeURIComponent(email)}`)
+      const profile = await callApi<UserProfile | null>('GET', `/profiles/search?email=${encodeURIComponent(email)}`)
       if (!profile) {
         return false
       }
@@ -604,7 +683,7 @@ function App() {
       }
 
       // 4. Create friendship request in MongoDB
-      const friendshipPayload = {
+      const friendshipPayload: FriendshipRecord = {
         requesterId: authUser.id,
         requesterName: authUser.name,
         requesterEmail: authUser.email,
@@ -620,7 +699,7 @@ function App() {
         friendshipStatus: 'pending'
       }
 
-      const createdFriendship = await createWorkspaceRecord<any>('friends', friendshipPayload)
+      const createdFriendship = await createWorkspaceRecord<FriendshipRecord>('friends', friendshipPayload)
       if (!createdFriendship) return false
 
       // 5. Update local state
@@ -629,7 +708,7 @@ function App() {
         name: profile.name,
         email: profile.email,
         status: profile.status || '用手札記錄生活 ✏️',
-        avatarUrl: profile.avatarUrl,
+        avatarUrl: profile.avatarUrl ?? 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
         tone: profile.tone || 'green',
         isStarred: false,
         friendshipId: createdFriendship.id,
@@ -640,23 +719,9 @@ function App() {
 
       // If friendship is already accepted (e.g. mock tests or instant matches), auto-create chat thread
       if (createdFriendship.friendshipStatus === 'accepted') {
-        const newThread: ChatThread = {
-          id: profile.id,
-          name: profile.name,
-          type: 'direct',
-          avatarUrl: profile.avatarUrl,
-          messages: [
-            {
-              id: `msg-${Date.now()}`,
-              author: profile.name,
-              text: '你好，很高興認識你！我們的共通聊天室已啟用。',
-              time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
-            }
-          ]
-        }
         setChatThreads(prev => {
           if (prev.some(t => t.id === profile.id)) return prev
-          return [...prev, newThread]
+          return [...prev, createDirectChatThread(newFriend)]
         })
         setActiveChatThreadId(profile.id)
       }
@@ -777,8 +842,9 @@ function App() {
   }
 
   const handleDeleteFriend = (friendId: string) => {
+    const targetFriend = workspaceFriends.find((f) => f.id === friendId)
     setWorkspaceFriends((prev) => prev.filter((f) => f.id !== friendId))
-    syncDeleteRecord('friends', friendId)
+    syncDeleteRecord('friends', targetFriend?.friendshipId ?? friendId)
     setWorkspaceGroups((prev) =>
       prev.map((g) => ({
         ...g,
@@ -786,6 +852,9 @@ function App() {
       })),
     )
     setChatThreads((prev) => prev.filter((t) => t.id !== friendId))
+    if (activeChatThreadId === friendId) {
+      setActiveChatThreadId('')
+    }
   }
 
   const handleClearAllData = () => {
@@ -968,12 +1037,12 @@ function App() {
 
         // Load current user profile from MongoDB
         try {
-          const profile = await callApi<any>('GET', `/profiles/search?email=${encodeURIComponent(authUser.email)}`)
+          const profile = await callApi<UserProfile | null>('GET', `/profiles/search?email=${encodeURIComponent(authUser.email)}`)
           if (profile) {
             setUserName(profile.name)
-            setUserAvatarUrl(profile.avatarUrl)
-            setUserStatus(profile.status)
-            setUserTone(profile.tone)
+            if (profile.avatarUrl) setUserAvatarUrl(profile.avatarUrl)
+            if (profile.status) setUserStatus(profile.status)
+            setUserTone(profile.tone ?? 'green')
           }
         } catch (err) {
           console.error('Failed to load current user profile:', err)
@@ -983,14 +1052,14 @@ function App() {
         setWorkspaceNotes(snapshot.notes as WorkspaceNote[])
         
         // Map raw friendships from MongoDB to Friend objects
-        const rawFriendships = snapshot.friends as any[]
+        const rawFriendships = snapshot.friends as FriendshipRecord[]
         const formattedFriends = rawFriendships.map(f => {
           const isRequester = f.requesterId 
             ? (f.requesterId === authUser.id) 
             : (f.requesterEmail?.toLowerCase() === authUser.email.toLowerCase())
           return {
-            id: isRequester ? f.addresseeId : (f.requesterId || f.id),
-            name: isRequester ? f.addresseeName : f.requesterName,
+            id: (isRequester ? f.addresseeId : f.requesterId) ?? f.id ?? '',
+            name: (isRequester ? f.addresseeName : f.requesterName) ?? '未命名好友',
             email: isRequester ? f.addresseeEmail : f.requesterEmail,
             status: isRequester ? (f.addresseeStatus ?? '') : (f.requesterStatus ?? ''),
             avatarUrl: isRequester 
@@ -1007,7 +1076,7 @@ function App() {
         
         setWorkspaceAlbums(snapshot.albums as Album[])
         setWorkspacePhotos(snapshot.photos as Photo[])
-        const mappedPosts = ((snapshot.chatPosts as any[]) || []).map(p => ({
+        const mappedPosts = ((snapshot.chatPosts as StoredChatPost[]) || []).map(p => ({
           ...p,
           editable: p.ownerId === authUser.id
         }))
@@ -1630,11 +1699,7 @@ function App() {
             <div className="settings-group">
               <label style={{ fontWeight: 'bold', color: '#48341f', marginBottom: '8px', display: 'block' }}>在線色彩狀態</label>
               <div style={{ display: 'flex', gap: '8px' }}>
-                {[
-                  { value: 'green', label: '🟢 在線' },
-                  { value: 'amber', label: '🟡 忙碌' },
-                  { value: 'gray', label: '⚫ 離線' }
-                ].map((toneOpt) => (
+                {statusToneOptions.map((toneOpt) => (
                   <button
                     key={toneOpt.value}
                     type="button"
@@ -1649,7 +1714,7 @@ function App() {
                       cursor: 'pointer',
                       fontWeight: userTone === toneOpt.value ? 'bold' : 'normal'
                     }}
-                    onClick={() => setUserTone(toneOpt.value as any)}
+                    onClick={() => setUserTone(toneOpt.value)}
                   >
                     {toneOpt.label}
                   </button>
@@ -4148,7 +4213,7 @@ function FriendsPage({
 
   // User search and invite states
   const [inviteEmail, setInviteEmail] = useState('')
-  const [searchResult, setSearchResult] = useState<any | null>(null)
+  const [searchResult, setSearchResult] = useState<UserProfile | null>(null)
   const [searchError, setSearchError] = useState('')
   const [isSearching, setIsSearching] = useState(false)
   const [isSendingInvite, setIsSendingInvite] = useState(false)
@@ -4162,7 +4227,7 @@ function FriendsPage({
     setSearchResult(null)
     setInviteSentSuccess(false)
     try {
-      const result = await callApi<any>('GET', `/profiles/search?email=${encodeURIComponent(inviteEmail.trim())}`)
+      const result = await callApi<UserProfile | null>('GET', `/profiles/search?email=${encodeURIComponent(inviteEmail.trim())}`)
       if (result) {
         setSearchResult(result)
       } else {
@@ -4560,7 +4625,8 @@ function FriendsPage({
                             onClick={() => {
                               if (activeInvite.friendshipId) {
                                 onAcceptInvite(activeInvite.friendshipId)
-                                setSelectedFriendId('')
+                                setSelectedFriendId(activeInvite.id)
+                                setActiveTab('好友')
                               }
                             }}
                           >
@@ -6322,7 +6388,7 @@ function AddFriendModal({
   onSendInvite: (email: string) => Promise<boolean>
 }) {
   const [email, setEmail] = useState('')
-  const [searchResult, setSearchResult] = useState<any | null>(null)
+  const [searchResult, setSearchResult] = useState<UserProfile | null>(null)
   const [searchError, setSearchError] = useState('')
   const [isSearching, setIsSearching] = useState(false)
   const [isSending, setIsSending] = useState(false)
@@ -6336,7 +6402,7 @@ function AddFriendModal({
     setSearchResult(null)
     setSentSuccess(false)
     try {
-      const result = await callApi<any>('GET', `/profiles/search?email=${encodeURIComponent(email.trim())}`)
+      const result = await callApi<UserProfile | null>('GET', `/profiles/search?email=${encodeURIComponent(email.trim())}`)
       if (result) {
         setSearchResult(result)
       } else {

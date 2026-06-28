@@ -31,7 +31,7 @@ const workspacePatchFields: Record<string, Set<string>> = {
     'chatMessages',
     'likedByMe',
   ]),
-  [collections.friendships]: new Set(['name', 'status', 'avatarUrl', 'tone', 'isStarred']),
+  [collections.friendships]: new Set(['name', 'status', 'avatarUrl', 'tone', 'isStarred', 'friendshipStatus']),
   [collections.albums]: new Set([
     'title',
     'description',
