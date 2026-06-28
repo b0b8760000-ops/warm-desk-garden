@@ -492,6 +492,29 @@ function App() {
     [workspaceFriends],
   )
 
+  const getAcceptedFriendIdsForSharing = async () => {
+    const loadedFriendIds = acceptedWorkspaceFriends.map(f => f.id).filter(Boolean)
+    if (loadedFriendIds.length > 0 || !authUser) {
+      return loadedFriendIds
+    }
+
+    try {
+      const rawFriendships = await callApi<FriendshipRecord[]>('GET', '/friends')
+      return rawFriendships
+        .filter((friendship) => friendship.friendshipStatus === 'accepted' || !friendship.friendshipStatus)
+        .map((friendship) => {
+          const isRequester = friendship.requesterId
+            ? friendship.requesterId === authUser.id
+            : friendship.requesterEmail?.toLowerCase() === authUser.email.toLowerCase()
+          return (isRequester ? friendship.addresseeId : friendship.requesterId) ?? ''
+        })
+        .filter(Boolean)
+    } catch (error) {
+      console.warn('Failed to refresh friends before sharing chat post.', error)
+      return []
+    }
+  }
+
   const syncCreateRecord = <T,>(path: string, record: T) => {
     if (!hasRemoteSession) return
 
@@ -1345,31 +1368,35 @@ function App() {
 
   const handleCreateChatPost = (post: ChatFeedPost) => {
     if (!authUser) return
-    const acceptedFriendIds = acceptedWorkspaceFriends.map(f => f.id)
-    const postPayload = {
-      ...post,
-      author: authUser.name || '我',
-      avatarUrl: userAvatarUrl,
-      visibleToUserIds: acceptedFriendIds
-    }
-    syncCreateRecord('chat-posts', postPayload)
+    void (async () => {
+      const acceptedFriendIds = await getAcceptedFriendIdsForSharing()
+      const postPayload = {
+        ...post,
+        author: authUser.name || '我',
+        avatarUrl: userAvatarUrl,
+        visibleToUserIds: acceptedFriendIds
+      }
+      syncCreateRecord('chat-posts', postPayload)
+    })()
   }
 
   const handleUpdateChatPost = (postId: string, post: Partial<ChatFeedPost>) => {
     if (!authUser) return
-    const acceptedFriendIds = acceptedWorkspaceFriends.map(f => f.id)
-    const updatedComments = post.comments?.map(c => {
-      if (c.author === '我') {
-        return { ...c, author: authUser.name || '我' }
+    void (async () => {
+      const acceptedFriendIds = await getAcceptedFriendIdsForSharing()
+      const updatedComments = post.comments?.map(c => {
+        if (c.author === '我') {
+          return { ...c, author: authUser.name || '我' }
+        }
+        return c
+      })
+      const updatePayload = {
+        ...post,
+        comments: updatedComments || post.comments,
+        visibleToUserIds: acceptedFriendIds
       }
-      return c
-    })
-    const updatePayload = {
-      ...post,
-      comments: updatedComments || post.comments,
-      visibleToUserIds: acceptedFriendIds
-    }
-    syncUpdateRecord<ChatFeedPost>('chat-posts', postId, updatePayload)
+      syncUpdateRecord<ChatFeedPost>('chat-posts', postId, updatePayload)
+    })()
   }
 
   const handleDeleteChatPost = (postId: string) => {

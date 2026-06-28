@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -994,14 +994,72 @@ describe('Warm Desk Garden app shell', () => {
     await user.type(screen.getByLabelText('貼文內容'), '給真正好友看的近況')
     await user.click(screen.getByRole('button', { name: '儲存貼文' }))
 
-    expect(apiMocks.callApi).toHaveBeenCalledWith(
-      'POST',
-      '/chat-posts',
-      expect.objectContaining({
-        text: '給真正好友看的近況',
-        visibleToUserIds: ['accepted-friend'],
-      }),
-    )
+    await waitFor(() => {
+      expect(apiMocks.callApi).toHaveBeenCalledWith(
+        'POST',
+        '/chat-posts',
+        expect.objectContaining({
+          text: '給真正好友看的近況',
+          visibleToUserIds: ['accepted-friend'],
+        }),
+      )
+    })
+  })
+
+  it('refreshes accepted friends before sharing when chat opens before friends finish loading', async () => {
+    const user = userEvent.setup()
+    let friendFetches = 0
+
+    apiMocks.callApi.mockImplementation((method: string, path: string, payload?: MockApiPayload) => {
+      if (method === 'GET' && path === '/friends') {
+        friendFetches += 1
+        return Promise.resolve(
+          friendFetches === 1
+            ? []
+            : [
+                {
+                  id: 'friendship-refreshed',
+                  requesterId: 'user-1',
+                  requesterName: '學良',
+                  requesterEmail: 'garden@example.com',
+                  addresseeId: 'accepted-after-refresh',
+                  addresseeName: '載入後好友',
+                  addresseeEmail: 'after-refresh@example.com',
+                  friendshipStatus: 'accepted',
+                },
+              ],
+        )
+      }
+      if (method === 'GET' && path.startsWith('/profiles/search')) {
+        return Promise.resolve(null)
+      }
+      if (method === 'GET') {
+        return Promise.resolve([])
+      }
+      if (method === 'POST' && path === '/chat-posts') {
+        return Promise.resolve({ id: 'post-after-refresh', ...(payload ?? {}) })
+      }
+      return Promise.resolve(null)
+    })
+
+    await renderAuthenticatedApp()
+
+    await user.click(screen.getByRole('button', { name: '聊天' }))
+    await user.click(screen.getByRole('button', { name: '發一則貼文' }))
+    await user.type(screen.getByLabelText('貼文內容'), '剛登入也要分享給好友')
+    await user.click(screen.getByRole('button', { name: '儲存貼文' }))
+
+    await waitFor(() => {
+      expect(apiMocks.callApi).toHaveBeenCalledWith(
+        'POST',
+        '/chat-posts',
+        expect.objectContaining({
+          text: '剛登入也要分享給好友',
+          visibleToUserIds: ['accepted-after-refresh'],
+        }),
+      )
+    })
+    expect(friendFetches).toBeGreaterThanOrEqual(2)
   })
 
   it('gives album photo upload a clear per-album entry point', async () => {
