@@ -8,22 +8,32 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "server:build": "tsc -p server/tsconfig.json",
+    "server:start": "node server/dist/index.js",
+    "server:worker": "node server/dist/worker.js",
+    "server:cron": "node server/dist/cron.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "appwrite": "^26.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "lucide-react": "^1.21.0",
     "mongodb": "^7.3.0",
     "node-appwrite": "^26.2.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6"
+    "react-dom": "^19.2.6",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^24.12.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

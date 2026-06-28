@@ -40,6 +40,7 @@ jobs:
           VITE_APPWRITE_PROJECT_ID: 6a39ed84003504b380f9
           VITE_APPWRITE_BUCKET_ID: warm-desk-garden-files
           VITE_APPWRITE_API_FUNCTION_ID: warm-desk-garden-api
+          VITE_RENDER_API_URL: https://defect-system-bco5.onrender.com
 
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v4

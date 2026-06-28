@@ -30,6 +30,10 @@ export async function signOut() {
   return appwriteAccount.deleteSession('current')
 }
 
+export async function createAppwriteJwt() {
+  return appwriteAccount.createJWT()
+}
+
 export async function uploadUserFile(file: File) {
   if (!bucketId) {
     throw new Error('VITE_APPWRITE_BUCKET_ID is required to upload files.')

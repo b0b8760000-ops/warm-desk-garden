@@ -37,6 +37,7 @@ VITE_APPWRITE_ENDPOINT=https://sgp.cloud.appwrite.io/v1
 VITE_APPWRITE_PROJECT_ID=6a39ed84003504b380f9
 VITE_APPWRITE_BUCKET_ID=warm-desk-garden-files
 VITE_APPWRITE_API_FUNCTION_ID=warm-desk-garden-api
+VITE_RENDER_API_URL=https://defect-system-bco5.onrender.com
 ```
 
 Do not put backend secrets in frontend `.env.local`. For local backend setup,
@@ -71,7 +72,7 @@ MongoDB collections used by the Function API:
 
 ## Appwrite Function
 
-The Function lives in `functions/api` and exposes routes for:
+The legacy Appwrite Function lives in `functions/api` and exposes routes for:
 
 - `/me`
 - `/folders`
@@ -93,3 +94,38 @@ Deploy and configure the backend with:
 
 The script creates the Appwrite Storage bucket, creates the Function, writes the
 Function variables, writes `.env.local`, and deploys `functions/api`.
+
+## Render Backend
+
+The Render backend lives in `server` and is the preferred backend for realtime
+chat. The current free deployment reuses the existing Render service URL:
+
+```text
+https://defect-system-bco5.onrender.com
+```
+
+```bash
+npm run server:build
+npm run server:start
+```
+
+For a new Render account or a paid setup, `render.yaml` describes:
+
+- `warm-desk-garden-api`: free Render Web Service for Express API + Socket.IO.
+
+The worker and cron source files are kept in `server/src`, but they are not
+enabled in `render.yaml` because the current deployment path avoids paid Render
+resources and payment-method prompts.
+
+Set these Render environment variables:
+
+```text
+APPWRITE_ENDPOINT=https://sgp.cloud.appwrite.io/v1
+APPWRITE_PROJECT_ID=6a39ed84003504b380f9
+APPWRITE_API_KEY=
+MONGODB_URI=
+MONGODB_DB_NAME=warm_desk_garden
+CORS_ORIGIN=https://b0b8760000-ops.github.io
+```
+
+If the Render API URL changes, update frontend `VITE_RENDER_API_URL` to match.
