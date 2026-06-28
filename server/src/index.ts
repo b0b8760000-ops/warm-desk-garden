@@ -7,6 +7,7 @@ import { apiRouter } from './api.js'
 import { getCurrentUserFromRequest } from './auth.js'
 import { collections } from './collections.js'
 import { getDb } from './db.js'
+import { chatPostRooms } from './security.js'
 
 const app = express()
 const allowedOrigins = (process.env.CORS_ORIGIN ?? '')
@@ -69,7 +70,9 @@ io.on('connection', (socket) => {
       }
       const result = await db.collection(collections.chatPosts).insertOne(post)
       const savedPost = { ...post, id: result.insertedId.toHexString() }
-      io.emit('chat:post', savedPost)
+      for (const room of chatPostRooms(savedPost)) {
+        io.to(room).emit('chat:post', savedPost)
+      }
       callback?.({ ok: true, post: savedPost })
     } catch (error) {
       callback?.({

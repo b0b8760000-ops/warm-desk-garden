@@ -12,10 +12,22 @@ import {
   type ApiRecord,
 } from './routes.js'
 import { requireUser, type AuthenticatedRequest } from './auth.js'
+import {
+  sanitizeCalendarEventCreate,
+  sanitizeCalendarEventPatch,
+  sanitizeCalendarTaskCreate,
+  sanitizeCalendarTaskPatch,
+  sanitizeWorkspacePatch,
+} from './security.js'
 
 export const apiRouter = Router()
 
 apiRouter.use(requireUser)
+
+function pickNotificationPatch(body: ApiRecord) {
+  const allowed = new Set(['readAt', 'status'])
+  return Object.fromEntries(Object.entries(body).filter(([key]) => allowed.has(key)))
+}
 
 apiRouter.get('/health', (_req, res) => {
   res.json({ ok: true })
@@ -60,9 +72,10 @@ apiRouter.all('*path', async (req, res, next) => {
       }
 
       if (req.method === 'PATCH' && route.id) {
+        const patch = sanitizeWorkspacePatch(route.collection, req.body)
         const result = await db.collection<ApiRecord>(route.collection).findOneAndUpdate(
           scopedIdQuery(route.id, scope),
-          { $set: { ...req.body, updatedAt: new Date().toISOString() } },
+          { $set: { ...patch, updatedAt: new Date().toISOString() } },
           { returnDocument: 'after' },
         )
         res.json(normalizeDocument(result))
@@ -87,13 +100,7 @@ apiRouter.all('*path', async (req, res, next) => {
 
     if (req.method === 'POST' && path === '/calendar/events') {
       const now = new Date().toISOString()
-      const event = {
-        ...req.body,
-        ownerId: user.id,
-        participantIds: req.body.participantIds ?? [],
-        createdAt: now,
-        updatedAt: now,
-      }
+      const event = sanitizeCalendarEventCreate(req.body, user.id, now)
       const result = await db.collection(collections.calendarEvents).insertOne(event)
       res.status(201).json({ ...event, id: result.insertedId.toHexString() })
       return
@@ -101,9 +108,10 @@ apiRouter.all('*path', async (req, res, next) => {
 
     if (req.method === 'PATCH' && path.startsWith('/calendar/events/')) {
       const id = path.split('/').at(-1)
+      const patch = sanitizeCalendarEventPatch(req.body)
       const result = await db.collection<ApiRecord>(collections.calendarEvents).findOneAndUpdate(
         scopedIdQuery(id, { ownerId: user.id }),
-        { $set: { ...req.body, updatedAt: new Date().toISOString() } },
+        { $set: { ...patch, updatedAt: new Date().toISOString() } },
         { returnDocument: 'after' },
       )
       res.json(normalizeDocument(result))
@@ -128,14 +136,7 @@ apiRouter.all('*path', async (req, res, next) => {
 
     if (req.method === 'POST' && path === '/calendar/tasks') {
       const now = new Date().toISOString()
-      const task = {
-        ...req.body,
-        ownerId: user.id,
-        assigneeIds: req.body.assigneeIds ?? [],
-        completedAt: null,
-        createdAt: now,
-        updatedAt: now,
-      }
+      const task = sanitizeCalendarTaskCreate(req.body, user.id, now)
       const result = await db.collection(collections.calendarTasks).insertOne(task)
       res.status(201).json({ ...task, id: result.insertedId.toHexString() })
       return
@@ -143,9 +144,22 @@ apiRouter.all('*path', async (req, res, next) => {
 
     if (req.method === 'PATCH' && path.startsWith('/calendar/tasks/')) {
       const id = path.split('/').at(-1)
+      const task = await db.collection<ApiRecord>(collections.calendarTasks).findOne(
+        scopedIdQuery(id, { $or: [{ ownerId: user.id }, { assigneeIds: user.id }] }),
+      )
+
+      if (!task) {
+        res.json(null)
+        return
+      }
+
+      const patch = sanitizeCalendarTaskPatch(
+        req.body,
+        task.ownerId === user.id ? 'owner' : 'assignee',
+      )
       const result = await db.collection<ApiRecord>(collections.calendarTasks).findOneAndUpdate(
         scopedIdQuery(id, { $or: [{ ownerId: user.id }, { assigneeIds: user.id }] }),
-        { $set: { ...req.body, updatedAt: new Date().toISOString() } },
+        { $set: { ...patch, updatedAt: new Date().toISOString() } },
         { returnDocument: 'after' },
       )
       res.json(normalizeDocument(result))
@@ -195,7 +209,7 @@ apiRouter.all('*path', async (req, res, next) => {
       const id = path.split('/').at(-1)
       const notification = await db.collection<ApiRecord>(collections.notifications).findOneAndUpdate(
         scopedIdQuery(id, { ownerId: user.id }),
-        { $set: { ...req.body, updatedAt: new Date().toISOString() } },
+        { $set: { ...pickNotificationPatch(req.body), updatedAt: new Date().toISOString() } },
         { returnDocument: 'after' },
       )
       res.json(normalizeDocument(notification))

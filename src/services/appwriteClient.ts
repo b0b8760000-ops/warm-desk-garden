@@ -1,4 +1,4 @@
-import { Account, Client, Functions, ID, Storage } from 'appwrite'
+import { Account, Client, Functions, ID, Permission, Role, Storage } from 'appwrite'
 
 const endpoint = import.meta.env.VITE_APPWRITE_ENDPOINT ?? ''
 const projectId = import.meta.env.VITE_APPWRITE_PROJECT_ID ?? ''
@@ -34,10 +34,24 @@ export async function createAppwriteJwt() {
   return appwriteAccount.createJWT()
 }
 
+export function buildOwnerFilePermissions(userId: string) {
+  return [
+    Permission.read(Role.user(userId)),
+    Permission.update(Role.user(userId)),
+    Permission.delete(Role.user(userId)),
+  ]
+}
+
 export async function uploadUserFile(file: File) {
   if (!bucketId) {
     throw new Error('VITE_APPWRITE_BUCKET_ID is required to upload files.')
   }
 
-  return appwriteStorage.createFile(bucketId, ID.unique(), file)
+  const user = await appwriteAccount.get()
+  return appwriteStorage.createFile(
+    bucketId,
+    ID.unique(),
+    file,
+    buildOwnerFilePermissions(user.$id),
+  )
 }
