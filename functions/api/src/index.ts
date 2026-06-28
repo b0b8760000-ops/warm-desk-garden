@@ -16,6 +16,46 @@ export default async function main(ctx: FunctionContext) {
       return ctx.res.json({ id: user.id, email: user.email })
     }
 
+    if (method === 'POST' && path === '/profiles') {
+      const profile = {
+        userId: user.id,
+        name: body.name ?? user.name ?? '',
+        email: user.email.toLowerCase(),
+        avatarUrl: body.avatarUrl ?? `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150`,
+        status: body.status ?? '用手札記錄生活 ✏️',
+        tone: body.tone ?? 'green',
+        updatedAt: new Date().toISOString()
+      }
+      await db.collection(collections.profiles).updateOne(
+        { userId: user.id },
+        { 
+          $set: profile, 
+          $setOnInsert: { createdAt: new Date().toISOString() } 
+        },
+        { upsert: true }
+      )
+      return ctx.res.json(profile)
+    }
+
+    if (method === 'GET' && path === '/profiles/search') {
+      const searchEmail = String(ctx.req.query?.email || '').trim().toLowerCase()
+      if (!searchEmail) {
+        return ctx.res.json({ error: 'Email is required' }, 400)
+      }
+      const profile = await db.collection(collections.profiles).findOne({ email: searchEmail })
+      if (!profile) {
+        return ctx.res.json(null)
+      }
+      return ctx.res.json({
+        id: profile.userId,
+        name: profile.name,
+        email: profile.email,
+        avatarUrl: profile.avatarUrl,
+        status: profile.status,
+        tone: profile.tone
+      })
+    }
+
     const resourceRoute = matchResourceRoute(path)
     if (resourceRoute) {
       const collection = resourceRoute.collection

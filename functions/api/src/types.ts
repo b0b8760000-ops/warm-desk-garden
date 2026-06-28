@@ -4,6 +4,7 @@ export type FunctionContext = {
     path: string
     headers: Record<string, string>
     bodyText?: string
+    query?: Record<string, unknown>
   }
   res: {
     json: (body: unknown, status?: number) => unknown
@@ -15,4 +16,5 @@ export type FunctionContext = {
 export type CurrentUser = {
   id: string
   email: string
+  name?: string
 }

@@ -95,3 +95,7 @@ export async function uploadUserFileForDisplay(file: File) {
   const uploadedFile = await uploadUserFile(file)
   return buildFileViewUrl(uploadedFile.$id)
 }
+
+export async function updateUserName(name: string) {
+  return await appwriteAccount.updateName(name)
+}

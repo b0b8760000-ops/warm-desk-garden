@@ -6,6 +6,7 @@ import {
   signInWithEmail,
   signOut,
   uploadUserFileForDisplay,
+  updateUserName,
   type AuthUser,
 } from './services/appwriteClient'
 import {
@@ -14,6 +15,7 @@ import {
   loadWorkspaceSnapshot,
   updateWorkspaceRecord,
 } from './services/workspaceApi'
+import { callApi } from './services/apiClient'
 import {
   Bell,
   CalendarDays,
@@ -576,6 +578,117 @@ function App() {
     setActiveChatThreadId(friendId)
   }
 
+  const handleAcceptInvite = async (friendshipId: string) => {
+    try {
+      const updated = await updateWorkspaceRecord<any>('friends', friendshipId, {
+        friendshipStatus: 'accepted'
+      })
+      if (!updated) return
+      
+      // Update local state
+      setWorkspaceFriends((prev) =>
+        prev.map((f) => (f.friendshipId === friendshipId ? { ...f, friendshipStatus: 'accepted' } : f))
+      )
+
+      // Create a chat thread for this friend
+      const targetFriend = workspaceFriends.find(f => f.friendshipId === friendshipId)
+      if (targetFriend) {
+        const newThread: ChatThread = {
+          id: targetFriend.id,
+          name: targetFriend.name,
+          type: 'direct',
+          avatarUrl: targetFriend.avatarUrl,
+          messages: [
+            {
+              id: `msg-${Date.now()}`,
+              author: targetFriend.name,
+              text: '你好，很高興認識你！我們的共通聊天室已啟用。',
+              time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
+            },
+          ],
+        }
+        setChatThreads((prev) => {
+          if (prev.some(t => t.id === targetFriend.id)) return prev
+          return [...prev, newThread]
+        })
+      }
+    } catch (err) {
+      console.error('Failed to accept friend request:', err)
+      alert('接受好友邀請失敗，請稍後再試！')
+    }
+  }
+
+  const handleDeclineInvite = async (friendshipId: string) => {
+    try {
+      await deleteWorkspaceRecord('friends', friendshipId)
+      
+      // Update local state
+      setWorkspaceFriends((prev) => prev.filter((f) => f.friendshipId !== friendshipId))
+    } catch (err) {
+      console.error('Failed to decline friend request:', err)
+      alert('拒絕好友邀請失敗，請稍後再試！')
+    }
+  }
+
+  const handleSendInvite = async (email: string): Promise<boolean> => {
+    if (!authUser) return false
+    try {
+      // 1. Search for profile by email
+      const profile = await callApi<any>('GET', `/profiles/search?email=${encodeURIComponent(email)}`)
+      if (!profile) {
+        return false
+      }
+
+      // 2. Prevent sending invite to oneself
+      if (profile.id === authUser.id) {
+        alert('不能加自己為好友喔！')
+        return true // Handled but no request sent
+      }
+
+      // 3. Prevent duplicate requests
+      if (workspaceFriends.some(f => f.id === profile.id)) {
+        alert('你們已經是好友或已有待處理的邀請！')
+        return true // Handled but no request sent
+      }
+
+      // 4. Create friendship request in MongoDB
+      const friendshipPayload = {
+        addresseeId: profile.id,
+        addresseeName: profile.name,
+        addresseeEmail: profile.email,
+        addresseeAvatarUrl: profile.avatarUrl,
+        addresseeStatus: profile.status || '用手札記錄生活 ✏️',
+        addresseeTone: profile.tone || 'green',
+        requesterName: authUser.name,
+        requesterEmail: authUser.email,
+        requesterAvatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
+        requesterStatus: '專注生活中...',
+        requesterTone: 'green',
+        friendshipStatus: 'pending'
+      }
+
+      const createdFriendship = await createWorkspaceRecord<any>('friends', friendshipPayload)
+      if (!createdFriendship) return false
+
+      // 5. Update local state
+      const newFriend: Friend = {
+        id: profile.id,
+        name: profile.name,
+        status: profile.status || '用手札記錄生活 ✏️',
+        avatarUrl: profile.avatarUrl,
+        tone: profile.tone || 'green',
+        isStarred: false,
+        friendshipId: createdFriendship.id,
+        friendshipStatus: 'pending'
+      }
+      setWorkspaceFriends(prev => [...prev, newFriend])
+      return true
+    } catch (err) {
+      console.error('Failed to send friend request:', err)
+      return false
+    }
+  }
+
   const handleCreateAlbum = (
     title: string,
     description: string,
@@ -708,6 +821,44 @@ function App() {
     setWorkspacePhotos([])
   }
 
+  const [isSavingSettings, setIsSavingSettings] = useState(false)
+
+  const handleSaveSettings = async () => {
+    if (!authUser) return
+    setIsSavingSettings(true)
+    try {
+      // 1. Sync to MongoDB profiles
+      await callApi('POST', '/profiles', {
+        id: authUser.id,
+        name: userName,
+        email: authUser.email,
+        avatarUrl: userAvatarUrl,
+        status: userStatus,
+        tone: userTone
+      })
+
+      // 2. Sync to Appwrite if configured
+      if (isAppwriteConfigured) {
+        await updateUserName(userName)
+      }
+
+      // 3. Update local auth user name state
+      setAuthUser((prev) => (prev ? { ...prev, name: userName } : null))
+      setUserName(userName)
+      localStorage.setItem('userName', userName)
+      localStorage.setItem('bgStyle', bgStyle)
+      localStorage.setItem('customBgUrl', customBgUrl)
+
+      setShowSettings(false)
+      alert('個人設定儲存成功！')
+    } catch (err) {
+      console.error('Failed to save settings:', err)
+      alert('儲存設定失敗，請確認網路狀態。')
+    } finally {
+      setIsSavingSettings(false)
+    }
+  }
+
   const [userName, setUserName] = useState(() => {
     return localStorage.getItem('userName') || '學良'
   })
@@ -718,6 +869,9 @@ function App() {
     return localStorage.getItem('customBgUrl') || ''
   })
   const [showSettings, setShowSettings] = useState(false)
+  const [userAvatarUrl, setUserAvatarUrl] = useState('https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150')
+  const [userStatus, setUserStatus] = useState('用手札記錄生活 ✏️')
+  const [userTone, setUserTone] = useState<'green' | 'amber' | 'gray'>('green')
 
   const resetWorkspaceData = () => {
     setActiveSection('首頁')
@@ -751,6 +905,11 @@ function App() {
     setHasRemoteSession(true)
     setAuthStatus('authenticated')
     setUserName(getAuthDisplayName(user))
+    
+    // Sync profile to database
+    callApi('POST', '/profiles', { name: user.name }).catch((err) => {
+      console.error('Failed to sync profile to database:', err)
+    })
   }
 
   const handleSignIn = async (email: string, password: string) => {
@@ -821,7 +980,7 @@ function App() {
     let cancelled = false
 
     async function loadWorkspace() {
-      if (!hasRemoteSession) {
+      if (!hasRemoteSession || !authUser) {
         return
       }
 
@@ -829,9 +988,42 @@ function App() {
         const snapshot = await loadWorkspaceSnapshot()
         if (!snapshot || cancelled) return
 
+        // Load current user profile from MongoDB
+        try {
+          const profile = await callApi<any>('GET', `/profiles/search?email=${encodeURIComponent(authUser.email)}`)
+          if (profile) {
+            setUserName(profile.name)
+            setUserAvatarUrl(profile.avatarUrl)
+            setUserStatus(profile.status)
+            setUserTone(profile.tone)
+          }
+        } catch (err) {
+          console.error('Failed to load current user profile:', err)
+        }
+
         setWorkspaceFolders(snapshot.folders as FolderModel[])
         setWorkspaceNotes(snapshot.notes as WorkspaceNote[])
-        setWorkspaceFriends(snapshot.friends as Friend[])
+        
+        // Map raw friendships from MongoDB to Friend objects
+        const rawFriendships = snapshot.friends as any[]
+        const formattedFriends = rawFriendships.map(f => {
+          const isRequester = f.requesterId === authUser.id
+          return {
+            id: isRequester ? f.addresseeId : f.requesterId,
+            name: isRequester ? f.addresseeName : f.requesterName,
+            status: isRequester ? (f.addresseeStatus ?? '') : (f.requesterStatus ?? ''),
+            avatarUrl: isRequester 
+              ? (f.addresseeAvatarUrl ?? 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150') 
+              : (f.requesterAvatarUrl ?? 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150'),
+            tone: isRequester ? (f.addresseeTone ?? 'green') : (f.requesterTone ?? 'green'),
+            isStarred: f.isStarred ?? false,
+            friendshipId: f.id,
+            friendshipStatus: f.friendshipStatus,
+            isIncoming: !isRequester
+          }
+        })
+        setWorkspaceFriends(formattedFriends)
+        
         setWorkspaceAlbums(snapshot.albums as Album[])
         setWorkspacePhotos(snapshot.photos as Photo[])
         setChatPosts(snapshot.chatPosts as ChatFeedPost[])
@@ -847,7 +1039,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [hasRemoteSession])
+  }, [hasRemoteSession, authUser])
 
   const handleBgFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -1203,6 +1395,7 @@ function App() {
             onOpenLightbox={setLightboxUrl}
           />
         ) : null}
+
         {activeSection === '資料夾' ? (
           <FoldersPage
             folders={workspaceFolders}
@@ -1261,6 +1454,9 @@ function App() {
             onDeleteFriend={handleDeleteFriend}
             onStartCall={setCallingFriendId}
             onOpenAddFriend={() => setShowAddFriendModal(true)}
+            onAcceptInvite={handleAcceptInvite}
+            onDeclineInvite={handleDeclineInvite}
+            onSendInvite={handleSendInvite}
           />
         ) : null}
         {activeSection === '相簿' ? (
@@ -1350,29 +1546,118 @@ function App() {
       {/* Settings Modal */}
       {showSettings && (
         <div className="settings-modal-overlay" onClick={() => setShowSettings(false)}>
-          <div className="settings-modal-content" onClick={(e) => e.stopPropagation()}>
+<div className="settings-modal-content" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
             <h3>個人手帳設定</h3>
             
+            <div className="settings-group" style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+              <div style={{ position: 'relative' }}>
+                <img src={userAvatarUrl} alt="目前頭像" style={{ width: '60px', height: '60px', borderRadius: '50%', objectFit: 'cover', border: '2px solid #d3c4a9' }} />
+                <span className={`status-dot ${userTone}`} style={{ position: 'absolute', bottom: '2px', right: '2px', width: '12px', height: '12px', border: '2px solid #fff' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label htmlFor="settings-username" style={{ fontWeight: 'bold', color: '#48341f' }}>用戶名稱</label>
+                <input
+                  id="settings-username"
+                  type="text"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                  placeholder="輸入您的名字"
+                  style={{ width: '100%', marginTop: '4px' }}
+                />
+              </div>
+            </div>
+
             <div className="settings-group">
-              <label htmlFor="settings-username">用戶名稱</label>
+              <label style={{ fontWeight: 'bold', color: '#48341f', marginBottom: '8px', display: 'block' }}>選取頭像預設值</label>
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                {[
+                  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
+                  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&h=150',
+                  'https://images.unsplash.com/photo-1599566150163-29194dcaad36?auto=format&fit=crop&w=150&h=150',
+                  'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=150&h=150',
+                  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&h=150'
+                ].map((presetUrl, idx) => (
+                  <button
+                    key={presetUrl}
+                    type="button"
+                    style={{
+                      padding: 0,
+                      background: 'transparent',
+                      border: userAvatarUrl === presetUrl ? '3px solid #877864' : '1px solid #d3c4a9',
+                      borderRadius: '50%',
+                      cursor: 'pointer',
+                      width: '40px',
+                      height: '40px',
+                      overflow: 'hidden'
+                    }}
+                    onClick={() => setUserAvatarUrl(presetUrl)}
+                  >
+                    <img src={presetUrl} alt={`預設頭像 ${idx + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </button>
+                ))}
+              </div>
+              <label htmlFor="settings-avatar-url" style={{ fontSize: '12px', color: '#7a6a53' }}>或輸入自訂頭像圖片網址</label>
               <input
-                id="settings-username"
+                id="settings-avatar-url"
                 type="text"
-                value={userName}
-                onChange={(e) => setUserName(e.target.value)}
-                placeholder="輸入您的名字"
+                value={userAvatarUrl}
+                onChange={(e) => setUserAvatarUrl(e.target.value)}
+                placeholder="https://example.com/avatar.jpg"
+                style={{ width: '100%', marginTop: '4px' }}
               />
             </div>
 
             <div className="settings-group">
-              <label>桌面背景風格</label>
-              <div className="bg-choices-grid">
+              <label htmlFor="settings-userstatus" style={{ fontWeight: 'bold', color: '#48341f' }}>個人狀態/座右銘</label>
+              <input
+                id="settings-userstatus"
+                type="text"
+                value={userStatus}
+                onChange={(e) => setUserStatus(e.target.value)}
+                placeholder="用手札記錄生活 ✏️"
+                style={{ width: '100%', marginTop: '4px' }}
+              />
+            </div>
+
+            <div className="settings-group">
+              <label style={{ fontWeight: 'bold', color: '#48341f', marginBottom: '8px', display: 'block' }}>在線色彩狀態</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {[
+                  { value: 'green', label: '🟢 在線' },
+                  { value: 'amber', label: '🟡 忙碌' },
+                  { value: 'gray', label: '⚫ 離線' }
+                ].map((toneOpt) => (
+                  <button
+                    key={toneOpt.value}
+                    type="button"
+                    style={{
+                      flex: 1,
+                      padding: '8px',
+                      borderRadius: '6px',
+                      border: userTone === toneOpt.value ? '2px solid #877864' : '1px solid #d3c4a9',
+                      background: userTone === toneOpt.value ? 'rgba(135, 120, 100, 0.1)' : 'transparent',
+                      color: '#48341f',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      fontWeight: userTone === toneOpt.value ? 'bold' : 'normal'
+                    }}
+                    onClick={() => setUserTone(toneOpt.value as any)}
+                  >
+                    {toneOpt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="settings-group">
+              <label style={{ fontWeight: 'bold', color: '#48341f' }}>桌面背景風格</label>
+              <div className="bg-choices-grid" style={{ marginTop: '4px' }}>
                 <button
                   type="button"
                   className={bgStyle === 'default' ? 'bg-choice active' : 'bg-choice'}
                   onClick={() => setBgStyle('default')}
                 >
-                  🌾 溫暖木質書桌 (預設)
+                  🌾 溫慢木質書桌 (預設)
                 </button>
                 <button
                   type="button"
@@ -1399,7 +1684,7 @@ function App() {
             </div>
 
             <div className="settings-group">
-              <label htmlFor="settings-custom-bg">自訂背景圖片網址</label>
+              <label htmlFor="settings-custom-bg" style={{ fontSize: '13px' }}>自訂背景圖片網址</label>
               <input
                 id="settings-custom-bg"
                 type="text"
@@ -1409,17 +1694,18 @@ function App() {
                   setBgStyle('custom')
                 }}
                 placeholder="https://example.com/image.jpg"
+                style={{ width: '100%', marginTop: '4px' }}
               />
             </div>
 
             <div className="settings-group">
-              <label htmlFor="settings-upload-bg">上傳自訂背景圖片</label>
+              <label htmlFor="settings-upload-bg" style={{ fontSize: '13px' }}>上傳自訂背景圖片</label>
               <input
                 id="settings-upload-bg"
                 type="file"
                 accept="image/*"
                 onChange={handleBgFileUpload}
-                style={{ padding: '4px' }}
+                style={{ padding: '4px', width: '100%', marginTop: '4px' }}
               />
               {customBgUrl.startsWith('data:image') && (
                 <div style={{ marginTop: '6px', fontSize: '12px', color: '#536843', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -1449,8 +1735,9 @@ function App() {
                 </div>
               )}
             </div>
+
             <div className="settings-group data-maintenance-box">
-              <label>數據維護</label>
+              <label style={{ fontSize: '13px' }}>數據維護</label>
               <div className="maintenance-buttons-row" style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
                 <button
                   type="button"
@@ -1478,9 +1765,12 @@ function App() {
               </div>
             </div>
 
-            <div className="settings-actions">
-              <button className="primary-button" type="button" onClick={() => setShowSettings(false)}>
-                完成設定
+            <div className="settings-actions" style={{ display: 'flex', gap: '10px' }}>
+              <button className="primary-button" type="button" disabled={isSavingSettings} onClick={handleSaveSettings} style={{ flex: 1, background: '#5c7c59', color: '#fff' }}>
+                {isSavingSettings ? '儲存中...' : '儲存個人設定 💾'}
+              </button>
+              <button className="primary-button" type="button" onClick={() => setShowSettings(false)} style={{ flex: 1, background: 'transparent', color: '#73614e', border: '1px solid #d3c4a9' }}>
+                取消
               </button>
             </div>
           </div>
@@ -3816,6 +4106,9 @@ interface FriendsPageProps {
   onDeleteFriend: (friendId: string) => void
   onStartCall: (friendId: string) => void
   onOpenAddFriend: () => void
+  onAcceptInvite: (friendshipId: string) => void
+  onDeclineInvite: (friendshipId: string) => void
+  onSendInvite: (email: string) => Promise<boolean>
 }
 
 function FriendsPage({
@@ -3830,8 +4123,11 @@ function FriendsPage({
   onDeleteFriend,
   onStartCall,
   onOpenAddFriend,
+  onAcceptInvite,
+  onDeclineInvite,
+  onSendInvite,
 }: FriendsPageProps) {
-  const [activeTab, setActiveTab] = useState<'全部' | '好友' | '群組'>('全部')
+  const [activeTab, setActiveTab] = useState<'全部' | '好友' | '群組' | '邀請'>('全部')
   const [selectedFriendId, setSelectedFriendId] = useState('friend-1')
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [activeSubTab, setActiveSubTab] = useState<'關於' | '共同回憶' | '筆記' | '相簿' | '行程'>('關於')
@@ -3840,6 +4136,56 @@ function FriendsPage({
   const [isEditingGroups, setIsEditingGroups] = useState(false)
   const [isCreatingGroup, setIsCreatingGroup] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
+
+  // User search and invite states
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [searchResult, setSearchResult] = useState<any | null>(null)
+  const [searchError, setSearchError] = useState('')
+  const [isSearching, setIsSearching] = useState(false)
+  const [isSendingInvite, setIsSendingInvite] = useState(false)
+  const [inviteSentSuccess, setInviteSentSuccess] = useState(false)
+
+  const handleSearchUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!inviteEmail.trim()) return
+    setIsSearching(true)
+    setSearchError('')
+    setSearchResult(null)
+    setInviteSentSuccess(false)
+    try {
+      const result = await callApi<any>('GET', `/profiles/search?email=${encodeURIComponent(inviteEmail.trim())}`)
+      if (result) {
+        setSearchResult(result)
+      } else {
+        setSearchError('找不到該使用者，請確認 Email 是否輸入正確。')
+      }
+    } catch (err) {
+      console.error('Search user failed:', err)
+      setSearchError('搜尋時發生錯誤，請稍後再試。')
+    } finally {
+      setIsSearching(false)
+    }
+  }
+
+  const handleSendInviteSubmit = async () => {
+    if (!searchResult) return
+    setIsSendingInvite(true)
+    try {
+      const ok = await onSendInvite(searchResult.email)
+      if (ok) {
+        setInviteSentSuccess(true)
+        setSearchResult(null)
+        setInviteEmail('')
+      } else {
+        alert('傳送好友邀請失敗，可能已是好友或已有待處理邀請。')
+      }
+    } catch (err) {
+      console.error('Send invite failed:', err)
+      alert('傳送好友邀請時發生錯誤。')
+    } finally {
+      setIsSendingInvite(false)
+    }
+  }
 
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
   const [editingGroupName, setEditingGroupName] = useState('')
@@ -3867,7 +4213,7 @@ function FriendsPage({
 
   // Filtered and sorted friends list: Starred置頂
   const filteredFriends = useMemo(() => {
-    let list = friends
+    let list = friends.filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus)
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
       list = list.filter(
@@ -3882,6 +4228,10 @@ function FriendsPage({
       return bStar - aStar
     })
   }, [friends, searchQuery])
+
+  const pendingInvites = useMemo(() => {
+    return friends.filter(f => f.friendshipStatus === 'pending')
+  }, [friends])
 
   const filteredGroups = useMemo(() => {
     let list = groups
@@ -3992,12 +4342,20 @@ function FriendsPage({
         <aside className="book-page book-page-left">
           <div className="binder-page-heading">
             <div>
-              <h3>{activeTab === '群組' ? '我的群組' : '好友列表'}</h3>
+              <h3>
+                {activeTab === '群組'
+                  ? '我的群組'
+                  : activeTab === '邀請'
+                    ? '待處理的好友邀請'
+                    : '好友列表'}
+              </h3>
               <p>
                 共{' '}
                 {activeTab === '群組'
                   ? filteredGroups.length
-                  : filteredFriends.length}{' '}
+                  : activeTab === '邀請'
+                    ? pendingInvites.length
+                    : filteredFriends.length}{' '}
                 個項目
               </p>
             </div>
@@ -4070,6 +4428,42 @@ function FriendsPage({
                   </button>
                 )}
               </>
+            ) : activeTab === '邀請' ? (
+              // Invites tab list
+              <>
+                {pendingInvites.length === 0 ? (
+                  <div className="friend-empty-state" style={{ padding: '20px', textAlign: 'center', fontSize: '13px', color: '#888' }}>
+                    目前沒有待處理的好友邀請 🍃
+                  </div>
+                ) : (
+                  pendingInvites.map((invite) => (
+                    <button
+                      className={
+                        selectedFriendId === invite.id
+                          ? 'friend-handbook-row active'
+                          : 'friend-handbook-row'
+                      }
+                      key={invite.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedFriendId(invite.id)
+                        setSelectedGroupId(null)
+                      }}
+                    >
+                      <img src={invite.avatarUrl} alt="" />
+                      <div className="friend-summary-info">
+                        <div className="friend-row-name-line">
+                          <strong>{invite.name}</strong>
+                          <span className={`status-dot ${invite.tone}`} />
+                        </div>
+                        <span style={{ fontSize: '11px', color: invite.isIncoming ? '#a15d5d' : '#5d71a1', fontWeight: 'bold' }}>
+                          {invite.isIncoming ? '📥 收到好友邀請' : '📤 已送出邀請'}
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </>
             ) : (
               // Friends list (All or Friends tab)
               filteredFriends.map((friend) => {
@@ -4100,7 +4494,7 @@ function FriendsPage({
                         <div className="friend-group-badges">
                           {friendGroups.map((g) => (
                             <span key={g.id} className="group-badge">
-                              {g.name}
+                               {g.name}
                             </span>
                           ))}
                         </div>
@@ -4112,7 +4506,7 @@ function FriendsPage({
             )}
           </div>
 
-          {activeTab !== '群組' && (
+          {activeTab !== '群組' && activeTab !== '邀請' && (
             <button className="wide-paper-button" type="button" onClick={onOpenAddFriend}>
               <Plus aria-hidden="true" size={16} />
               邀請好友加入
@@ -4122,378 +4516,557 @@ function FriendsPage({
 
         {/* Right page: Profile info or Group Detail */}
         <article className="book-page book-page-right friend-profile-page">
-          {showGroupDetail && activeGroup ? (
-            // Group details management layout
-            <div className="group-detail-panel">
-              <div className="group-detail-header">
-                <div className="group-title-edit-row">
-                  {editingGroupId === activeGroup.id ? (
-                    <div className="group-rename-input-wrap">
-                      <input
-                        type="text"
-                        value={editingGroupName}
-                        onChange={(e) => setEditingGroupName(e.target.value)}
-                        maxLength={15}
-                        aria-label="更名群組名稱"
-                      />
-                      <button
-                        type="button"
-                        className="rename-btn-confirm"
-                        onClick={() => handleRenameGroup(activeGroup.id)}
-                      >
-                        儲存
-                      </button>
-                      <button
-                        type="button"
-                        className="rename-btn-cancel"
-                        onClick={() => setEditingGroupId(null)}
-                      >
-                        取消
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <h2>👥 {activeGroup.name}</h2>
-                      <button
-                        type="button"
-                        className="action-icon-btn"
-                        aria-label="重命名群組"
-                        onClick={() => {
-                          setEditingGroupId(activeGroup.id)
-                          setEditingGroupName(activeGroup.name)
-                        }}
-                      >
-                        ✏️
-                      </button>
-                    </>
-                  )}
-                </div>
-                <div className="group-header-actions-row" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <button
-                    type="button"
-                    className="group-chat-btn"
-                    onClick={() => onStartChat(activeGroup.id)}
-                  >
-                    💬 開啟聊天室
-                  </button>
-                  <button
-                    type="button"
-                    className="delete-group-action-btn"
-                    onClick={() => handleDeleteGroup(activeGroup.id)}
-                  >
-                    🗑️ 刪除群組
-                  </button>
-                </div>
-              </div>
+          {(() => {
+            const activeInvite = pendingInvites.find(i => i.id === selectedFriendId)
 
-              <div className="group-detail-section">
-                <h4>群組成員 ({activeGroup.memberIds.length}人)</h4>
-                <div className="group-members-list-grid">
-                  {activeGroup.memberIds.map((id) => {
-                    const member = friends.find((f) => f.id === id)
-                    if (!member) return null
-                    return (
-                      <div key={member.id} className="group-member-item-row">
-                        <div
-                          className="member-info-click"
+            if (activeTab === '邀請') {
+              if (activeInvite) {
+                return (
+                  <div className="invite-detail-card" style={{ padding: '20px' }}>
+                    <div className="profile-header" style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                      <img src={activeInvite.avatarUrl} alt="" style={{ width: '60px', height: '60px', borderRadius: '50%' }} />
+                      <div>
+                        <h2 style={{ margin: '0', fontSize: '20px', color: '#48341f' }}>{activeInvite.name}</h2>
+                        <span className={`status-dot ${activeInvite.tone}`} style={{ marginRight: '6px' }} />
+                        <span style={{ fontSize: '13px', color: '#7a6a53' }}>{activeInvite.status}</span>
+                      </div>
+                    </div>
+                    
+                    <div style={{ marginTop: '25px', padding: '15px', background: 'rgba(161, 93, 93, 0.05)', borderRadius: '6px', border: '1px dashed #d3c4a9' }}>
+                      <h4 style={{ margin: '0 0 8px 0', color: '#48341f' }}>邀請詳情</h4>
+                      <p style={{ margin: '0', fontSize: '13px', color: '#73614e' }}>
+                        {activeInvite.isIncoming 
+                          ? `「${activeInvite.name}」向您送出了好友邀請。接受後即可互相聊天與共享回憶！`
+                          : `您已向「${activeInvite.name}」送出好友邀請，正在等待對方核准。`}
+                      </p>
+                    </div>
+
+                    <div className="invite-actions" style={{ display: 'flex', gap: '10px', marginTop: '25px' }}>
+                      {activeInvite.isIncoming ? (
+                        <>
+                          <button
+                            type="button"
+                            className="btn-paper-submit"
+                            style={{ padding: '10px 20px', fontSize: '13px', background: '#5c7c59', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                            onClick={() => {
+                              if (activeInvite.friendshipId) {
+                                onAcceptInvite(activeInvite.friendshipId)
+                                setSelectedFriendId('')
+                              }
+                            }}
+                          >
+                            接受好友邀請 🟢
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-paper-cancel"
+                            style={{ padding: '10px 20px', fontSize: '13px', background: '#b15d5d', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                            onClick={() => {
+                              if (activeInvite.friendshipId) {
+                                onDeclineInvite(activeInvite.friendshipId)
+                                setSelectedFriendId('')
+                              }
+                            }}
+                          >
+                            拒絕邀請 🔴
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-paper-cancel"
+                          style={{ padding: '10px 20px', fontSize: '13px', background: '#73614e', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                           onClick={() => {
-                            setActiveTab('好友')
-                            setSelectedFriendId(member.id)
-                            setSelectedGroupId(null)
+                            if (activeInvite.friendshipId) {
+                              onDeclineInvite(activeInvite.friendshipId)
+                              setSelectedFriendId('')
+                            }
                           }}
                         >
-                          <img src={member.avatarUrl} alt="" />
-                          <div className="member-brief-text">
-                            <strong>{member.name}</strong>
-                            <span>{member.status}</span>
+                          取消好友邀請 ✕
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        style={{ padding: '10px 15px', fontSize: '13px', background: 'transparent', color: '#73614e', border: '1px solid #d3c4a9', borderRadius: '4px', cursor: 'pointer' }}
+                        onClick={() => setSelectedFriendId('')}
+                      >
+                        返回搜尋 🔍
+                      </button>
+                    </div>
+                  </div>
+                )
+              }
+
+              return (
+                <div className="invite-search-panel" style={{ padding: '20px' }}>
+                  <h3 style={{ marginTop: '0', color: '#48341f', fontSize: '16px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    🔍 搜尋用戶與發送邀請
+                  </h3>
+                  <p style={{ fontSize: '12px', color: '#7a6a53', marginTop: '-5px', marginBottom: '15px' }}>
+                    輸入對方的 Email 來尋找註冊於手札的使用者。
+                  </p>
+                  
+                  <form onSubmit={handleSearchUser} style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+                    <input
+                      type="email"
+                      required
+                      placeholder="請輸入 Email，例如：friend@example.com"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      style={{
+                        flex: 1,
+                        background: 'transparent',
+                        border: 'none',
+                        borderBottom: '2px solid #d3c4a9',
+                        padding: '8px 0',
+                        fontSize: '14px',
+                        outline: 'none',
+                        color: '#48341f'
+                      }}
+                    />
+                    <button
+                      type="submit"
+                      disabled={isSearching}
+                      style={{
+                        padding: '6px 15px',
+                        background: '#877864',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {isSearching ? '搜尋中...' : '搜尋'}
+                    </button>
+                  </form>
+
+                  {searchError && (
+                    <div style={{ padding: '10px', background: 'rgba(177, 93, 93, 0.05)', color: '#b15d5d', borderRadius: '4px', fontSize: '12px', border: '1px solid rgba(177, 93, 93, 0.15)' }}>
+                      ⚠️ {searchError}
+                    </div>
+                  )}
+
+                  {inviteSentSuccess && (
+                    <div style={{ padding: '12px', background: 'rgba(92, 124, 89, 0.05)', color: '#4d694b', borderRadius: '4px', fontSize: '13px', border: '1px solid rgba(92, 124, 89, 0.15)', fontWeight: 'bold' }}>
+                      🎉 好友邀請已成功送出！請等待對方核准。
+                    </div>
+                  )}
+
+                  {searchResult && (
+                    <div className="search-result-card" style={{ marginTop: '20px', padding: '15px', background: '#fcfaf6', border: '1px solid #d3c4a9', borderRadius: '6px', boxShadow: '0 2px 5px rgba(0,0,0,0.03)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <img src={searchResult.avatarUrl} alt="" style={{ width: '45px', height: '45px', borderRadius: '50%' }} />
+                        <div style={{ flex: 1 }}>
+                          <h4 style={{ margin: '0', fontSize: '15px', color: '#48341f' }}>{searchResult.name}</h4>
+                          <span style={{ fontSize: '11px', color: '#7a6a53' }}>{searchResult.email}</span>
+                          <div style={{ fontSize: '12px', color: '#7a6a53', marginTop: '4px' }}>
+                            <span className={`status-dot ${searchResult.tone}`} style={{ marginRight: '6px' }} />
+                            {searchResult.status}
                           </div>
                         </div>
                         <button
                           type="button"
-                          className="member-remove-btn"
-                          onClick={() =>
-                            handleRemoveMemberFromGroup(activeGroup.id, member.id)
-                          }
+                          disabled={isSendingInvite}
+                          onClick={handleSendInviteSubmit}
+                          style={{
+                            padding: '8px 12px',
+                            background: '#5c7c59',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            cursor: 'pointer',
+                            fontWeight: 'bold'
+                          }}
                         >
-                          移除
+                          {isSendingInvite ? '傳送中...' : '加為好友 ➕'}
                         </button>
                       </div>
-                    )
-                  })}
-                  {activeGroup.memberIds.length === 0 && (
-                    <p className="empty-group-text">本群組目前尚無成員。</p>
+                    </div>
                   )}
                 </div>
-              </div>
+              )
+            }
 
-              <div className="group-add-member-section">
-                <h4>新增成員</h4>
-                {(() => {
-                  const nonMembers = friends.filter(
-                    (f) => !activeGroup.memberIds.includes(f.id),
-                  )
-                  return nonMembers.length > 0 ? (
-                    <div className="add-member-picker-row">
-                      <select
-                        id={`non-member-select-${activeGroup.id}`}
-                        defaultValue=""
-                        aria-label="選擇新成員"
-                      >
-                        <option value="" disabled>
-                          選擇好友...
-                        </option>
-                        {nonMembers.map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.name}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="add-member-confirm-btn"
-                        onClick={() => {
-                          const selectEl = document.getElementById(
-                            `non-member-select-${activeGroup.id}`,
-                          ) as HTMLSelectElement
-                          if (selectEl && selectEl.value) {
-                            handleAddMemberToGroup(activeGroup.id, selectEl.value)
-                            selectEl.value = ''
-                          }
-                        }}
-                      >
-                        加入成員
-                      </button>
-                    </div>
-                  ) : (
-                    <p className="all-members-in-group-text">
-                      所有好友皆已在此群組中。
-                    </p>
-                  )
-                })()}
-              </div>
-            </div>
-          ) : activeFriend ? (
-            // Friend profile view layout
-            <>
-              {/* Profile Header */}
-              <div className="profile-header">
-                <img src={activeFriend.avatarUrl} alt="" />
-                <div className="profile-meta-title">
-                  <h2>{activeFriend.name}</h2>
-                  <span>
-                    🟢 在線 · {activeFriend.status}
-                  </span>
-                </div>
-                <div className="profile-actions-icons">
-                  <button
-                    aria-label="傳訊息"
-                    className="action-icon-btn"
-                    type="button"
-                    onClick={() => onStartChat(activeFriend.id)}
-                  >
-                    💬
-                  </button>
-                  <button
-                    aria-label="撥打電話"
-                    className="action-icon-btn"
-                    type="button"
-                    onClick={() => onStartCall(activeFriend.id)}
-                  >
-                    📞
-                  </button>
-                  <button
-                    aria-label="星號收藏好友"
-                    className={activeFriend.isStarred ? 'action-icon-btn starred-active' : 'action-icon-btn'}
-                    type="button"
-                    onClick={() => onToggleStarFriend(activeFriend.id)}
-                  >
-                    ★
-                  </button>
-                  <button
-                    aria-label="刪除好友"
-                    className="action-icon-btn delete-friend-btn"
-                    type="button"
-                    style={{ color: '#b15d5d' }}
-                    onClick={() => {
-                      if (window.confirm(`確定要將好友「${activeFriend.name}」自通訊錄中刪除嗎？`)) {
-                        onDeleteFriend(activeFriend.id)
-                      }
-                    }}
-                  >
-                    🗑️
-                  </button>
-                </div>
-              </div>
-
-              {/* Profile Sub Tabs */}
-              <div className="friend-sub-tabs">
-                {(['關於', '共同回憶', '筆記', '相簿', '行程'] as const).map(
-                  (tab) => (
-                    <span
-                      className={
-                        activeSubTab === tab
-                          ? 'friend-tab-span active'
-                          : 'friend-tab-span'
-                      }
-                      key={tab}
-                      onClick={() => setActiveSubTab(tab)}
-                    >
-                      {tab}
-                    </span>
-                  ),
-                )}
-              </div>
-
-              {activeSubTab === '關於' && (
-                <div className="friend-about-section">
-                  <div className="profile-grid">
-                    <div>
-                      <strong>生日</strong>
-                      <span>07月18日</span>
-                    </div>
-                    <div>
-                      <strong>所在地</strong>
-                      <span>台北市</span>
-                    </div>
-                    <div>
-                      <strong>興趣</strong>
-                      <span>旅行、攝影、閱讀、咖啡</span>
-                    </div>
-                    <div>
-                      <strong>備註</strong>
-                      <span>喜歡安靜的地方，推薦的展覽很用心。</span>
-                    </div>
-                  </div>
-
-                  {/* Dynamic Group Management within Friend Profile */}
-                  <div className="profile-groups-editor-box">
-                    <strong>所屬群組</strong>
-                    {isEditingGroups ? (
-                      <div className="profile-groups-checkbox-grid">
-                        <div className="checkbox-wrap-container">
-                          {groups.map((g) => {
-                            const isMember = g.memberIds.includes(activeFriend.id)
-                            return (
-                              <label
-                                key={g.id}
-                                className="group-chk-label-item"
-                              >
-                                <input
-                                  type="checkbox"
-                                  defaultChecked={isMember}
-                                  id={`chk-${g.id}`}
-                                />
-                                <span>{g.name}</span>
-                              </label>
-                            )
-                          })}
-                        </div>
-                        <div className="profile-groups-editor-actions">
+            if (showGroupDetail && activeGroup) {
+              return (
+                <div className="group-detail-panel">
+                  <div className="group-detail-header">
+                    <div className="group-title-edit-row">
+                      {editingGroupId === activeGroup.id ? (
+                        <div className="group-rename-input-wrap">
+                          <input
+                            type="text"
+                            value={editingGroupName}
+                            onChange={(e) => setEditingGroupName(e.target.value)}
+                            maxLength={15}
+                            aria-label="更名群組名稱"
+                          />
                           <button
                             type="button"
-                            className="editor-save-btn"
-                            onClick={() => {
-                              const checkedIds = groups
-                                .filter((g) => {
-                                  const chk = document.getElementById(
-                                    `chk-${g.id}`,
-                                  ) as HTMLInputElement
-                                  return chk && chk.checked
-                                })
-                                .map((g) => g.id)
-                              handleUpdateFriendGroups(
-                                activeFriend.id,
-                                checkedIds,
-                              )
-                            }}
+                            className="rename-btn-confirm"
+                            onClick={() => handleRenameGroup(activeGroup.id)}
                           >
-                            儲存設定
+                            儲存
                           </button>
                           <button
                             type="button"
-                            className="editor-cancel-btn"
-                            onClick={() => setIsEditingGroups(false)}
+                            className="rename-btn-cancel"
+                            onClick={() => setEditingGroupId(null)}
                           >
                             取消
                           </button>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="profile-groups-viewer-wrap">
-                        <div className="profile-groups-badges-row">
-                          {getFriendGroups(activeFriend.id).map((g) => (
-                            <span key={g.id} className="group-badge">
-                              {g.name}
-                            </span>
-                          ))}
-                          {getFriendGroups(activeFriend.id).length === 0 && (
-                            <span className="no-groups-badge-label">
-                              目前無所屬群組
-                            </span>
-                          )}
+                      ) : (
+                        <>
+                          <h2>👥 {activeGroup.name}</h2>
+                          <button
+                            type="button"
+                            className="action-icon-btn"
+                            aria-label="重命名群組"
+                            onClick={() => {
+                              setEditingGroupId(activeGroup.id)
+                              setEditingGroupName(activeGroup.name)
+                            }}
+                          >
+                            ✏️
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    <div className="group-header-actions-row" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className="group-chat-btn"
+                        onClick={() => onStartChat(activeGroup.id)}
+                      >
+                        💬 開啟聊天室
+                      </button>
+                      <button
+                        type="button"
+                        className="delete-group-action-btn"
+                        onClick={() => handleDeleteGroup(activeGroup.id)}
+                      >
+                        🗑️ 刪除群組
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="group-detail-section">
+                    <h4>群組成員 ({activeGroup.memberIds.length}人)</h4>
+                    <div className="group-members-list-grid">
+                      {activeGroup.memberIds.map((id) => {
+                        const member = friends.find((f) => f.id === id)
+                        if (!member) return null
+                        return (
+                          <div key={member.id} className="group-member-item-row">
+                            <div
+                              className="member-info-click"
+                              onClick={() => {
+                                setActiveTab('好友')
+                                setSelectedFriendId(member.id)
+                                setSelectedGroupId(null)
+                              }}
+                            >
+                              <img src={member.avatarUrl} alt="" />
+                              <div className="member-brief-text">
+                                <strong>{member.name}</strong>
+                                <span>{member.status}</span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="member-remove-btn"
+                              onClick={() =>
+                                handleRemoveMemberFromGroup(activeGroup.id, member.id)
+                              }
+                            >
+                              移除
+                            </button>
+                          </div>
+                        )
+                      })}
+                      {activeGroup.memberIds.length === 0 && (
+                        <p className="empty-group-text">本群組目前尚無成員。</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="group-add-member-section">
+                    <h4>新增成員</h4>
+                    {(() => {
+                      const nonMembers = friends.filter(
+                        (f) => !activeGroup.memberIds.includes(f.id),
+                      )
+                      return nonMembers.length > 0 ? (
+                        <div className="add-member-picker-row">
+                          <select
+                            id={`non-member-select-${activeGroup.id}`}
+                            defaultValue=""
+                            aria-label="選擇新成員"
+                          >
+                            <option value="" disabled>
+                              選擇好友...
+                            </option>
+                            {nonMembers.map((f) => (
+                              <option key={f.id} value={f.id}>
+                                {f.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="add-member-confirm-btn"
+                            onClick={() => {
+                              const selectEl = document.getElementById(
+                                `non-member-select-${activeGroup.id}`,
+                              ) as HTMLSelectElement
+                              if (selectEl && selectEl.value) {
+                                handleAddMemberToGroup(activeGroup.id, selectEl.value)
+                                selectEl.value = ''
+                              }
+                            }}
+                          >
+                            加入成員
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          className="profile-edit-groups-btn"
-                          onClick={() => setIsEditingGroups(true)}
+                      ) : (
+                        <p className="all-members-in-group-text">
+                          所有好友皆已在此群組中。
+                        </p>
+                      )
+                    })()}
+                  </div>
+                </div>
+              )
+            }
+
+            if (activeFriend) {
+              return (
+                <>
+                  <div className="profile-header">
+                    <img src={activeFriend.avatarUrl} alt="" />
+                    <div className="profile-meta-title">
+                      <h2>{activeFriend.name}</h2>
+                      <span>
+                        🟢 在線 · {activeFriend.status}
+                      </span>
+                    </div>
+                    <div className="profile-actions-icons">
+                      <button
+                        aria-label="傳訊息"
+                        className="action-icon-btn"
+                        type="button"
+                        onClick={() => onStartChat(activeFriend.id)}
+                      >
+                        💬
+                      </button>
+                      <button
+                        aria-label="撥打電話"
+                        className="action-icon-btn"
+                        type="button"
+                        onClick={() => onStartCall(activeFriend.id)}
+                      >
+                        📞
+                      </button>
+                      <button
+                        aria-label="星號收藏好友"
+                        className={activeFriend.isStarred ? 'action-icon-btn starred-active' : 'action-icon-btn'}
+                        type="button"
+                        onClick={() => onToggleStarFriend(activeFriend.id)}
+                      >
+                        ★
+                      </button>
+                      <button
+                        aria-label="刪除好友"
+                        className="action-icon-btn delete-friend-btn"
+                        type="button"
+                        style={{ color: '#b15d5d' }}
+                        onClick={() => {
+                          if (window.confirm(`確定要將好友「${activeFriend.name}」自通訊錄中刪除嗎？`)) {
+                            onDeleteFriend(activeFriend.id)
+                          }
+                        }}
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="friend-sub-tabs">
+                    {(['關於', '共同回憶', '筆記', '相簿', '行程'] as const).map(
+                      (tab) => (
+                        <span
+                          className={
+                            activeSubTab === tab
+                              ? 'friend-tab-span active'
+                              : 'friend-tab-span'
+                          }
+                          key={tab}
+                          onClick={() => setActiveSubTab(tab)}
                         >
-                          ✏️ 編輯好友群組
-                        </button>
-                      </div>
+                          {tab}
+                        </span>
+                      ),
                     )}
                   </div>
 
-                  <div className="about-sticker">
-                    <p>Good day, good friend. 🌿</p>
-                  </div>
-                </div>
-              )}
+                  {activeSubTab === '關於' && (
+                    <div className="friend-about-section">
+                      <div className="profile-grid">
+                        <div>
+                          <strong>生日</strong>
+                          <span>07月18日</span>
+                        </div>
+                        <div>
+                          <strong>所在地</strong>
+                          <span>台北市</span>
+                        </div>
+                        <div>
+                          <strong>興趣</strong>
+                          <span>旅行、攝影、閱讀、咖啡</span>
+                        </div>
+                        <div>
+                          <strong>備註</strong>
+                          <span>喜歡安靜的地方，推薦的展覽很用心。</span>
+                        </div>
+                      </div>
 
-              {activeSubTab === '共同回憶' && (
-                <div className="friend-memories-section">
-                  <div className="friend-empty-state">還沒有共同回憶，之後可從相簿或聊天貼文連結過來。</div>
-                  <div className="recent-interactions-list">
-                    <h4>最近互動</h4>
-                    <div className="interaction-log-row">
-                      <span>2026.06.24 14:30</span>
-                      <p>
-                        {activeFriend.name}{' '}
-                        在你的心得「下午的陽光真好」按了讚
-                      </p>
-                    </div>
-                    <div className="interaction-log-row">
-                      <span>2026.06.20 19:45</span>
-                      <p>
-                        {activeFriend.name} 留言在你的筆記「花蓮三天兩夜」：
-                        "照片拍得好美！下次也帶我去😊"
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
+                      <div className="profile-groups-editor-box">
+                        <strong>所屬群組</strong>
+                        {isEditingGroups ? (
+                          <div className="profile-groups-checkbox-grid">
+                            <div className="checkbox-wrap-container">
+                              {groups.map((g) => {
+                                const isMember = g.memberIds.includes(activeFriend.id)
+                                return (
+                                  <label
+                                    key={g.id}
+                                    className="group-chk-label-item"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      defaultChecked={isMember}
+                                      id={`chk-${g.id}`}
+                                    />
+                                    <span>{g.name}</span>
+                                  </label>
+                                )
+                              })}
+                            </div>
+                            <div className="profile-groups-editor-actions">
+                              <button
+                                type="button"
+                                className="editor-save-btn"
+                                onClick={() => {
+                                  const checkedIds = groups
+                                    .filter((g) => {
+                                      const chk = document.getElementById(
+                                        `chk-${g.id}`,
+                                      ) as HTMLInputElement
+                                      return chk && chk.checked
+                                    })
+                                    .map((g) => g.id)
+                                  handleUpdateFriendGroups(
+                                    activeFriend.id,
+                                    checkedIds,
+                                  )
+                                }}
+                              >
+                                儲存設定
+                              </button>
+                              <button
+                                type="button"
+                                className="editor-cancel-btn"
+                                onClick={() => setIsEditingGroups(false)}
+                              >
+                                取消
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="profile-groups-viewer-wrap">
+                            <div className="profile-groups-badges-row">
+                              {getFriendGroups(activeFriend.id).map((g) => (
+                                <span key={g.id} className="group-badge">
+                                  {g.name}
+                                </span>
+                              ))}
+                              {getFriendGroups(activeFriend.id).length === 0 && (
+                                <span className="no-groups-badge-label">
+                                  目前無所屬群組
+                                </span>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              className="profile-edit-groups-btn"
+                              onClick={() => setIsEditingGroups(true)}
+                            >
+                              ✏️ 編輯好友群組
+                            </button>
+                          </div>
+                        )}
+                      </div>
 
-              {activeSubTab !== '關於' && activeSubTab !== '共同回憶' && (
-                <div className="friend-sub-placeholder">
-                  <p>尚無可共享的 {activeSubTab} 連結。</p>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="chat-empty-state">
-              請從左側列表選取一位好友或群組。
-            </div>
-          )}
+                      <div className="about-sticker">
+                        <p>Good day, good friend. 🌿</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSubTab === '共同回憶' && (
+                    <div className="friend-memories-section">
+                      <div className="friend-empty-state">還沒有共同回憶，之後可從相簿或聊天貼文連結過來。</div>
+                      <div className="recent-interactions-list">
+                        <h4>最近互動</h4>
+                        <div className="interaction-log-row">
+                          <span>2026.06.24 14:30</span>
+                          <p>
+                            {activeFriend.name}{' '}
+                            在你的心得「下午的陽光真好」按了讚
+                          </p>
+                        </div>
+                        <div className="interaction-log-row">
+                          <span>2026.06.20 19:45</span>
+                          <p>
+                            {activeFriend.name} 留言在你的筆記「花蓮三天兩夜」：
+                            "照片拍得好美！下次也帶裝我去😊"
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSubTab !== '關於' && activeSubTab !== '共同回憶' && (
+                    <div className="friend-sub-placeholder">
+                      <p>尚無可共享的 {activeSubTab} 連結。</p>
+                    </div>
+                  )}
+                </>
+              )
+            }
+
+            return (
+              <div className="chat-empty-state">
+                請從左側列表選取一位好友或群組。
+              </div>
+            )
+          })()}
         </article>
 
         {/* Right side page tabs: bookmarks */}
         <div className="page-tabs reflection-tabs" aria-label="好友右側分頁">
-          {(['全部', '好友', '群組'] as const).map((tab) => (
+          {(['全部', '好友', '群組', '邀請'] as const).map((tab) => (
             <button
               className={activeTab === tab ? 'active' : ''}
               key={tab}
               type="button"
               onClick={() => {
                 setActiveTab(tab)
+                setSelectedFriendId('') // clear selection to show search by default
               }}
             >
               {tab}

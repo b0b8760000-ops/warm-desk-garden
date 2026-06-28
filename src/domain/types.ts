@@ -79,6 +79,9 @@ export type Friend = {
   avatarUrl: string
   tone: 'green' | 'amber' | 'gray'
   isStarred?: boolean
+  friendshipId?: string
+  friendshipStatus?: 'pending' | 'accepted' | 'declined'
+  isIncoming?: boolean
 }
 
 export type Photo = {

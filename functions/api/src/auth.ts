@@ -23,5 +23,5 @@ export async function getCurrentUser(ctx: FunctionContext): Promise<CurrentUser>
   const users = new Users(client)
   const user = await users.get(userId)
 
-  return { id: user.$id, email: user.email }
+  return { id: user.$id, email: user.email, name: user.name }
 }
