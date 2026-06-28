@@ -1,7 +1,49 @@
-import { render, screen, within } from '@testing-library/react'
+﻿import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
+
+const authMocks = vi.hoisted(() => {
+  const defaultUser = { id: 'user-1', email: 'garden@example.com', name: '學良' }
+
+  return {
+    defaultUser,
+    getCurrentUser: vi.fn(),
+    signInWithEmail: vi.fn(),
+    registerWithEmail: vi.fn(),
+    signOut: vi.fn(),
+    uploadUserFileForDisplay: vi.fn(),
+  }
+})
+
+vi.mock('./services/appwriteClient', () => ({
+  isAppwriteConfigured: true,
+  getCurrentUser: authMocks.getCurrentUser,
+  signInWithEmail: authMocks.signInWithEmail,
+  registerWithEmail: authMocks.registerWithEmail,
+  signOut: authMocks.signOut,
+  uploadUserFileForDisplay: authMocks.uploadUserFileForDisplay,
+}))
+
+beforeEach(() => {
+  authMocks.getCurrentUser.mockReset()
+  authMocks.signInWithEmail.mockReset()
+  authMocks.registerWithEmail.mockReset()
+  authMocks.signOut.mockReset()
+  authMocks.uploadUserFileForDisplay.mockReset()
+
+  authMocks.getCurrentUser.mockResolvedValue(authMocks.defaultUser)
+  authMocks.signInWithEmail.mockResolvedValue(authMocks.defaultUser)
+  authMocks.registerWithEmail.mockResolvedValue(authMocks.defaultUser)
+  authMocks.signOut.mockResolvedValue(undefined)
+  authMocks.uploadUserFileForDisplay.mockRejectedValue(new Error('Storage unavailable in tests.'))
+})
+
+async function renderAuthenticatedApp() {
+  const result = render(<App />)
+  await screen.findByRole('button', { name: '首頁' })
+  return result
+}
 
 async function createFolder(user: ReturnType<typeof userEvent.setup>, name = '生活') {
   await user.click(screen.getByRole('button', { name: '資料夾' }))
@@ -24,8 +66,68 @@ async function createFriend(user: ReturnType<typeof userEvent.setup>, name = '�
 }
 
 describe('Warm Desk Garden app shell', () => {
-  it('uses the approved Chinese navigation and avoids Thread or Retro labels', () => {
+  it('shows the auth entrance when no Appwrite session exists', async () => {
+    authMocks.getCurrentUser.mockRejectedValueOnce(new Error('No active session'))
+
     render(<App />)
+
+    expect(await screen.findByRole('heading', { name: '登入我的資料花園' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Email')).toBeInTheDocument()
+    expect(screen.getByLabelText('密碼')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '資料夾' })).not.toBeInTheDocument()
+  })
+
+  it('registers a new Appwrite account and opens the workspace', async () => {
+    const user = userEvent.setup()
+    authMocks.getCurrentUser.mockRejectedValueOnce(new Error('No active session'))
+    authMocks.registerWithEmail.mockResolvedValueOnce({
+      id: 'user-2',
+      email: 'new-garden@example.com',
+      name: '新朋友',
+    })
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: '註冊' }))
+    await user.type(screen.getByLabelText('暱稱'), '新朋友')
+    await user.type(screen.getByLabelText('Email'), 'new-garden@example.com')
+    await user.type(screen.getByLabelText('密碼'), 'password123')
+    await user.type(screen.getByLabelText('確認密碼'), 'password123')
+    await user.click(screen.getByRole('button', { name: '建立帳號並進入' }))
+
+    expect(authMocks.registerWithEmail).toHaveBeenCalledWith(
+      'new-garden@example.com',
+      'password123',
+      '新朋友',
+    )
+    expect(await screen.findByRole('button', { name: '資料夾' })).toBeInTheDocument()
+    expect(screen.getByText('我的資料花園')).toBeInTheDocument()
+  })
+
+  it('signs in with Appwrite and signs out back to the auth entrance', async () => {
+    const user = userEvent.setup()
+    authMocks.getCurrentUser.mockRejectedValueOnce(new Error('No active session'))
+    authMocks.signInWithEmail.mockResolvedValueOnce({
+      id: 'user-3',
+      email: 'garden@example.com',
+      name: '學良',
+    })
+
+    render(<App />)
+
+    await user.type(await screen.findByLabelText('Email'), 'garden@example.com')
+    await user.type(screen.getByLabelText('密碼'), 'password123')
+    await user.click(screen.getByRole('button', { name: '登入並同步資料' }))
+    expect(authMocks.signInWithEmail).toHaveBeenCalledWith('garden@example.com', 'password123')
+
+    await user.click(await screen.findByRole('button', { name: '登出' }))
+
+    expect(authMocks.signOut).toHaveBeenCalledTimes(1)
+    expect(await screen.findByRole('heading', { name: '登入我的資料花園' })).toBeInTheDocument()
+  })
+
+  it('uses the approved Chinese navigation and avoids Thread or Retro labels', async () => {
+    await renderAuthenticatedApp()
 
     for (const label of ['首頁', '資料夾', '心得', '聊天', '好友', '相簿', '行事曆', '設定', '登出']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument()
@@ -38,7 +140,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('opens the calendar surface and lets a task be completed locally', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '行事曆' }))
     expect(screen.getByRole('heading', { name: '行事曆' })).toBeInTheDocument()
@@ -57,7 +159,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('supports complete local calendar event, task, invite, and reminder interactions', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '行事曆' }))
 
@@ -99,7 +201,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('shows a complete mock page for every primary section', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     const pages = [
       ['資料夾', '資料夾書櫃'],
@@ -120,7 +222,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('keeps the right rail only on the desk overview', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     expect(screen.getByLabelText('右側好友與相簿')).toBeInTheDocument()
 
@@ -133,7 +235,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('uses the reference bookshelf folder page without seeded books', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     expect(screen.queryByLabelText('書桌裝飾圖')).not.toBeInTheDocument()
 
@@ -157,7 +259,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('structures the bookshelf as bottom-aligned realistic compartments', async () => {
     const user = userEvent.setup()
-    const { container } = render(<App />)
+    const { container } = await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '資料夾' }))
 
@@ -174,7 +276,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('keeps bookshelf hover to scaling only without floating name labels or shelf add buttons', async () => {
     const user = userEvent.setup()
-    const { container } = render(<App />)
+    const { container } = await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '資料夾' }))
 
@@ -185,7 +287,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('places recent organization on the left and the realistic bookshelf on the right', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '資料夾' }))
 
@@ -202,7 +304,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('renders the notes page as a folder-internal binder notebook', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFolderAndOpen(user, '生活')
 
@@ -217,7 +319,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('opens the matching notes notebook from a bookshelf book', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFolderAndOpen(user, '生活')
 
@@ -229,7 +331,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('limits note uploads to photos and PDF files', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFolderAndOpen(user, '生活')
     await user.click(screen.getByRole('button', { name: '新增筆記內容' }))
@@ -241,7 +343,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('adds a named folder as a new bookshelf book and opens its empty notebook', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '資料夾' }))
     await user.click(screen.getByRole('button', { name: '新增資料夾' }))
@@ -261,7 +363,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('creates a new note inside the selected folder', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFolderAndOpen(user, '生活')
     await user.click(screen.getByRole('button', { name: '新增筆記內容' }))
@@ -272,7 +374,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('lets the selected note title and memo be edited directly', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFolderAndOpen(user, '生活')
     await user.click(screen.getByRole('button', { name: '新增筆記內容' }))
@@ -289,7 +391,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('makes the visible right-page header, photo labels, and PDF names editable', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFolderAndOpen(user, '旅行')
     await user.click(screen.getByRole('button', { name: '新增筆記內容' }))
@@ -329,7 +431,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('deletes the selected note and returns to the next note in the folder', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFolderAndOpen(user, '生活')
     await user.click(screen.getByRole('button', { name: '新增筆記內容' }))
@@ -344,7 +446,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('attaches uploaded photos and PDFs while rejecting other file types', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFolderAndOpen(user, '生活')
     await user.click(screen.getByRole('button', { name: '新增筆記內容' }))
@@ -370,7 +472,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('renders reflections as a mood journal binder with side tabs', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '心得' }))
 
@@ -386,7 +488,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('starts the reflections page without sample reflections or sample photos', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '心得' }))
 
@@ -399,7 +501,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('adds new reflections to the dated left list and shows the selected content on the right', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '心得' }))
     await user.click(screen.getAllByRole('button', { name: '寫一則新心得' })[0])
@@ -424,7 +526,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('deletes the selected reflection and returns to the next dated entry', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '心得' }))
     await user.click(screen.getAllByRole('button', { name: '寫一則新心得' })[0])
@@ -439,7 +541,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('uploads photos to the selected reflection', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '心得' }))
     await user.click(screen.getAllByRole('button', { name: '寫一則新心得' })[0])
@@ -453,7 +555,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('edits and deletes uploaded reflection photos', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '心得' }))
     await user.click(screen.getAllByRole('button', { name: '寫一則新心得' })[0])
@@ -475,7 +577,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('gives chat, friends, album, and calendar their reference notebook layouts', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFriend(user, '聊天朋友')
     await user.click(screen.getByRole('button', { name: '聊天' }))
@@ -493,7 +595,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('moves friend photo sharing into chat posts and keeps chat room in a side tab', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFriend(user, '聊天朋友')
     await user.click(screen.getByRole('button', { name: '聊天' }))
@@ -523,7 +625,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('removes friend sharing from the album section after moving it to chat', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '相簿' }))
 
@@ -533,7 +635,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('supports complete local chat post interactions before backend wiring', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await createFriend(user, '聊天室朋友')
     await user.click(screen.getByRole('button', { name: '聊天' }))
@@ -576,7 +678,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('starts with no demo content while keeping creation paths available', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '資料夾' }))
     expect(screen.queryByRole('button', { name: '管理生活資料夾' })).not.toBeInTheDocument()
@@ -594,7 +696,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('does not expose a restore-demo-data action in settings', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '設定' }))
 
@@ -604,7 +706,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('opens the add-friend modal from the header invite button', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '好友' }))
     await user.click(screen.getAllByRole('button', { name: '邀請好友' })[0])
@@ -617,7 +719,7 @@ describe('Warm Desk Garden app shell', () => {
 
   it('gives album photo upload a clear per-album entry point', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    await renderAuthenticatedApp()
 
     await user.click(screen.getByRole('button', { name: '相簿' }))
     await user.click(screen.getByRole('button', { name: '+ 新增週別' }))
@@ -632,3 +734,4 @@ describe('Warm Desk Garden app shell', () => {
     expect(screen.getByDisplayValue('第一張照片')).toBeInTheDocument()
   })
 })
+

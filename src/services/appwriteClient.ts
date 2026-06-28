@@ -24,8 +24,32 @@ export const appwriteAccount = new Account(appwriteClient)
 export const appwriteStorage = new Storage(appwriteClient)
 export const appwriteFunctions = new Functions(appwriteClient)
 
+export type AuthUser = {
+  id: string
+  email: string
+  name: string
+}
+
+function normalizeAuthUser(user: { $id: string; email: string; name?: string }) {
+  return {
+    id: user.$id,
+    email: user.email,
+    name: user.name ?? '',
+  }
+}
+
+export async function getCurrentUser() {
+  return normalizeAuthUser(await appwriteAccount.get())
+}
+
 export async function signInWithEmail(email: string, password: string) {
-  return appwriteAccount.createEmailPasswordSession(email, password)
+  await appwriteAccount.createEmailPasswordSession(email, password)
+  return getCurrentUser()
+}
+
+export async function registerWithEmail(email: string, password: string, name: string) {
+  await appwriteAccount.create(ID.unique(), email, password, name)
+  return signInWithEmail(email, password)
 }
 
 export async function signOut() {

@@ -1,5 +1,13 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { appwriteAccount, isAppwriteConfigured, uploadUserFileForDisplay } from './services/appwriteClient'
+import {
+  getCurrentUser,
+  isAppwriteConfigured,
+  registerWithEmail,
+  signInWithEmail,
+  signOut,
+  uploadUserFileForDisplay,
+  type AuthUser,
+} from './services/appwriteClient'
 import {
   createWorkspaceRecord,
   deleteWorkspaceRecord,
@@ -103,6 +111,8 @@ type ChatPostDraft = {
   photoUrl: string
   images: string[]
 }
+
+type AuthStatus = 'checking' | 'guest' | 'authenticated'
 
 const DB_NAME = 'warm-desk-garden-db'
 const STORE_NAME = 'settings'
@@ -209,6 +219,202 @@ async function getStoredFileUrl(file: File) {
   return getLocalFileUrl(file)
 }
 
+function getAuthDisplayName(user: AuthUser) {
+  return user.name || user.email.split('@')[0] || '我的書桌'
+}
+
+type AuthPageProps = {
+  status: AuthStatus
+  onSignIn: (email: string, password: string) => Promise<void>
+  onRegister: (email: string, password: string, name: string) => Promise<void>
+}
+
+function AuthPage({ status, onSignIn, onRegister }: AuthPageProps) {
+  const [mode, setMode] = useState<'signIn' | 'register'>('signIn')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [message, setMessage] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const isRegister = mode === 'register'
+  const isChecking = status === 'checking'
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setMessage('')
+
+    if (!isAppwriteConfigured) {
+      setMessage('Appwrite 尚未設定，請先確認 .env.local 與 GitHub Pages 環境變數。')
+      return
+    }
+
+    const trimmedEmail = email.trim()
+    const trimmedName = name.trim()
+
+    if (!trimmedEmail || !password) {
+      setMessage('請輸入 Email 與密碼。')
+      return
+    }
+
+    if (password.length < 8) {
+      setMessage('密碼至少需要 8 個字元。')
+      return
+    }
+
+    if (isRegister && !trimmedName) {
+      setMessage('請輸入暱稱，之後會顯示在你的書桌。')
+      return
+    }
+
+    if (isRegister && password !== confirmPassword) {
+      setMessage('兩次輸入的密碼不一致。')
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      if (isRegister) {
+        await onRegister(trimmedEmail, password, trimmedName)
+      } else {
+        await onSignIn(trimmedEmail, password)
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '登入處理失敗，請稍後再試。')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-scene" aria-label="登入資料花園">
+        <div className="auth-visual-panel">
+          <div className="auth-brand">
+            <span className="brand-mark">🌿</span>
+            <span>我的資料花園</span>
+          </div>
+          <div className="auth-bookshelf" aria-hidden="true">
+            <span className="auth-book sage">資料夾</span>
+            <span className="auth-book sand">筆記</span>
+            <span className="auth-book blue">心得</span>
+            <span className="auth-book rose">行事曆</span>
+          </div>
+          <div className="auth-note-card">
+            <p>登入後，你的資料會綁定 Appwrite 帳號，後端會用 session 決定 MongoDB 的 owner。</p>
+          </div>
+        </div>
+
+        <div className="auth-card">
+          {isChecking ? (
+            <div className="auth-checking" role="status">
+              <h1>正在整理你的書桌</h1>
+              <p>正在確認 Appwrite 登入狀態，稍等一下就能進入資料花園。</p>
+            </div>
+          ) : (
+            <>
+              <div className="auth-heading">
+                <p>Warm Desk Garden</p>
+                <h1>登入我的資料花園</h1>
+                <span>用同一個帳號綁定資料夾、筆記、心得、聊天、相簿與行事曆。</span>
+              </div>
+
+              <div className="auth-mode-tabs" role="tablist" aria-label="登入方式">
+                <button
+                  type="button"
+                  className={!isRegister ? 'active' : ''}
+                  onClick={() => {
+                    setMode('signIn')
+                    setMessage('')
+                  }}
+                >
+                  登入
+                </button>
+                <button
+                  type="button"
+                  className={isRegister ? 'active' : ''}
+                  onClick={() => {
+                    setMode('register')
+                    setMessage('')
+                  }}
+                >
+                  註冊
+                </button>
+              </div>
+
+              <form className="auth-form" onSubmit={handleSubmit}>
+                {isRegister ? (
+                  <label>
+                    <span>暱稱</span>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      autoComplete="name"
+                    />
+                  </label>
+                ) : null}
+
+                <label>
+                  <span>Email</span>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    autoComplete="email"
+                  />
+                </label>
+
+                <label>
+                  <span>密碼</span>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete={isRegister ? 'new-password' : 'current-password'}
+                  />
+                </label>
+
+                {isRegister ? (
+                  <label>
+                    <span>確認密碼</span>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(event) => setConfirmPassword(event.target.value)}
+                      autoComplete="new-password"
+                    />
+                  </label>
+                ) : null}
+
+                {message ? <p className="auth-message" role="alert">{message}</p> : null}
+                {!isAppwriteConfigured ? (
+                  <p className="auth-message subtle">
+                    目前找不到 Appwrite endpoint 或 project id，請先設定環境變數。
+                  </p>
+                ) : null}
+
+                <button
+                  className="auth-submit"
+                  type="submit"
+                  disabled={isSubmitting || !isAppwriteConfigured}
+                >
+                  {isSubmitting
+                    ? '同步中...'
+                    : isRegister
+                      ? '建立帳號並進入'
+                      : '登入並同步資料'}
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      </section>
+    </main>
+  )
+}
+
 function App() {
   const [activeSection, setActiveSection] = useState<AppSection>('首頁')
   const [workspaceAlbums, setWorkspaceAlbums] = useState<Album[]>([])
@@ -231,6 +437,10 @@ function App() {
   const [workspaceEvents, setWorkspaceEvents] = useState<CalendarEvent[]>([])
   const [workspaceTasks, setWorkspaceTasks] = useState<CalendarTask[]>([])
   const [hasRemoteSession, setHasRemoteSession] = useState(false)
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(
+    isAppwriteConfigured ? 'checking' : 'guest',
+  )
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null)
 
   const [chatThreads, setChatThreads] = useState<ChatThread[]>([])
   const [chatPosts, setChatPosts] = useState<ChatFeedPost[]>([])
@@ -509,6 +719,63 @@ function App() {
   })
   const [showSettings, setShowSettings] = useState(false)
 
+  const resetWorkspaceData = () => {
+    setActiveSection('首頁')
+    setWorkspaceAlbums([])
+    setWorkspacePhotos([])
+    setActiveSlideshowAlbumId(null)
+    setShowAddAlbumModal(false)
+    setShowUploadPhotoModal(false)
+    setWorkspaceFolders([])
+    setWorkspaceNotes([])
+    setSelectedFolderId('')
+    setCompletedTasks({})
+    setLightboxUrl(null)
+    setWorkspaceFriendPhotos([])
+    setActiveLightboxItems(null)
+    setActiveLightboxIndex(0)
+    setWorkspaceFriends([])
+    setCallingFriendId(null)
+    setShowAddFriendModal(false)
+    setWorkspaceGroups([])
+    setWorkspaceEvents([])
+    setWorkspaceTasks([])
+    setChatThreads([])
+    setChatPosts([])
+    setActiveChatThreadId('')
+    setChatActiveTab('全部')
+  }
+
+  const completeAuth = (user: AuthUser) => {
+    setAuthUser(user)
+    setHasRemoteSession(true)
+    setAuthStatus('authenticated')
+    setUserName(getAuthDisplayName(user))
+  }
+
+  const handleSignIn = async (email: string, password: string) => {
+    completeAuth(await signInWithEmail(email, password))
+  }
+
+  const handleRegister = async (email: string, password: string, name: string) => {
+    completeAuth(await registerWithEmail(email, password, name))
+  }
+
+  const handleSignOut = async () => {
+    try {
+      if (isAppwriteConfigured) {
+        await signOut()
+      }
+    } catch (error) {
+      console.warn('Appwrite sign out failed; clearing local session anyway.', error)
+    } finally {
+      setAuthUser(null)
+      setHasRemoteSession(false)
+      setAuthStatus('guest')
+      resetWorkspaceData()
+    }
+  }
+
   useEffect(() => {
     localStorage.setItem('userName', userName)
   }, [userName])
@@ -534,22 +801,17 @@ function App() {
   useEffect(() => {
     async function fetchUser() {
       if (!isAppwriteConfigured) {
+        setAuthStatus('guest')
+        setHasRemoteSession(false)
         return
       }
 
       try {
-        const user = await appwriteAccount.get()
-        if (user) {
-          setHasRemoteSession(true)
-          if (user.name) {
-            setUserName(user.name)
-          } else if (user.email) {
-            setUserName(user.email.split('@')[0])
-          }
-        }
+        completeAuth(await getCurrentUser())
       } catch {
+        setAuthUser(null)
         setHasRemoteSession(false)
-        console.log('Appwrite session not found or not configured, using fallback name.')
+        setAuthStatus('guest')
       }
     }
     fetchUser()
@@ -839,6 +1101,16 @@ function App() {
     syncDeleteRecord('chat-posts', postId)
   }
 
+  if (authStatus !== 'authenticated') {
+    return (
+      <AuthPage
+        status={authStatus}
+        onSignIn={handleSignIn}
+        onRegister={handleRegister}
+      />
+    )
+  }
+
   return (
     <main
       className={showRightRail ? 'app-shell' : 'app-shell focus-mode'}
@@ -849,6 +1121,12 @@ function App() {
           <span className="brand-mark">🌿</span>
           <span>我的資料花園</span>
         </div>
+        {authUser ? (
+          <div className="sidebar-account" aria-label="目前登入帳號">
+            <span>{getAuthDisplayName(authUser)}</span>
+            <small>{authUser.email}</small>
+          </div>
+        ) : null}
 
         <nav className="nav-list">
           {navItems.map((item) => {
@@ -874,7 +1152,7 @@ function App() {
             <Settings aria-hidden="true" size={17} />
             設定
           </button>
-          <button className="settings-button logout-button" type="button">
+          <button className="settings-button logout-button" type="button" onClick={handleSignOut}>
             <LogOut aria-hidden="true" size={17} />
             登出
           </button>
