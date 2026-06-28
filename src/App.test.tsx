@@ -167,6 +167,46 @@ describe('Warm Desk Garden app shell', () => {
     expect(screen.getByText('我的資料花園')).toBeInTheDocument()
   })
 
+  it('waits for profile sync before opening the workspace after registration', async () => {
+    const user = userEvent.setup()
+    let resolveProfileSync: (value: unknown) => void = () => {}
+    const profileSync = new Promise((resolve) => {
+      resolveProfileSync = resolve
+    })
+
+    authMocks.getCurrentUser.mockRejectedValueOnce(new Error('No active session'))
+    authMocks.registerWithEmail.mockResolvedValueOnce({
+      id: 'user-4',
+      email: 'searchable-friend@example.com',
+      name: '可搜尋朋友',
+    })
+    apiMocks.callApi.mockImplementation((method: string, path: string) => {
+      if (method === 'POST' && path === '/profiles') {
+        return profileSync
+      }
+      if (method === 'GET') {
+        return Promise.resolve([])
+      }
+      return Promise.resolve(null)
+    })
+
+    render(<App />)
+
+    await user.click(await screen.findByRole('button', { name: '註冊' }))
+    await user.type(screen.getByLabelText('暱稱'), '可搜尋朋友')
+    await user.type(screen.getByLabelText('Email'), 'searchable-friend@example.com')
+    await user.type(screen.getByLabelText('密碼'), 'password123')
+    await user.type(screen.getByLabelText('確認密碼'), 'password123')
+    await user.click(screen.getByRole('button', { name: '建立帳號並進入' }))
+
+    expect(apiMocks.callApi).toHaveBeenCalledWith('POST', '/profiles', { name: '可搜尋朋友' })
+    expect(screen.queryByRole('button', { name: '資料夾' })).not.toBeInTheDocument()
+
+    resolveProfileSync(null)
+
+    expect(await screen.findByRole('button', { name: '資料夾' })).toBeInTheDocument()
+  })
+
   it('signs in with Appwrite and signs out back to the auth entrance', async () => {
     const user = userEvent.setup()
     authMocks.getCurrentUser.mockRejectedValueOnce(new Error('No active session'))

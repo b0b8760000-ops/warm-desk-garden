@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getCurrentUser,
   isAppwriteConfigured,
@@ -951,24 +951,47 @@ function App() {
     setChatActiveTab('全部')
   }
 
-  const completeAuth = (user: AuthUser) => {
+  const syncOwnProfile = useCallback(async (user: AuthUser) => {
+    try {
+      await callApi('POST', '/profiles', { name: getAuthDisplayName(user) })
+    } catch (err) {
+      console.error('Failed to sync profile to database:', err)
+    }
+  }, [])
+
+  const completeAuth = useCallback(async (user: AuthUser) => {
     setAuthUser(user)
+    setUserName(getAuthDisplayName(user))
+    await syncOwnProfile(user)
     setHasRemoteSession(true)
     setAuthStatus('authenticated')
-    setUserName(getAuthDisplayName(user))
-    
-    // Sync profile to database
-    callApi('POST', '/profiles', { name: user.name }).catch((err) => {
-      console.error('Failed to sync profile to database:', err)
-    })
-  }
+  }, [syncOwnProfile])
+
+  useEffect(() => {
+    async function fetchUser() {
+      if (!isAppwriteConfigured) {
+        setAuthStatus('guest')
+        setHasRemoteSession(false)
+        return
+      }
+
+      try {
+        await completeAuth(await getCurrentUser())
+      } catch {
+        setAuthUser(null)
+        setHasRemoteSession(false)
+        setAuthStatus('guest')
+      }
+    }
+    fetchUser()
+  }, [completeAuth])
 
   const handleSignIn = async (email: string, password: string) => {
-    completeAuth(await signInWithEmail(email, password))
+    await completeAuth(await signInWithEmail(email, password))
   }
 
   const handleRegister = async (email: string, password: string, name: string) => {
-    completeAuth(await registerWithEmail(email, password, name))
+    await completeAuth(await registerWithEmail(email, password, name))
   }
 
   const handleSignOut = async () => {
@@ -1006,25 +1029,6 @@ function App() {
       }
     }
     loadCustomBg()
-  }, [])
-
-  useEffect(() => {
-    async function fetchUser() {
-      if (!isAppwriteConfigured) {
-        setAuthStatus('guest')
-        setHasRemoteSession(false)
-        return
-      }
-
-      try {
-        completeAuth(await getCurrentUser())
-      } catch {
-        setAuthUser(null)
-        setHasRemoteSession(false)
-        setAuthStatus('guest')
-      }
-    }
-    fetchUser()
   }, [])
 
   useEffect(() => {
