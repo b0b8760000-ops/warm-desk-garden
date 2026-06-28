@@ -45,6 +45,23 @@ export function ownerScopedQuery(collection: string, userId: string): Filter<Api
   return { ownerId: userId }
 }
 
+export function friendshipPairQuery(userId: string, addresseeId: unknown): Filter<ApiRecord> {
+  if (typeof addresseeId !== 'string' || !addresseeId || addresseeId === userId) {
+    throw Object.assign(new Error('A valid friend user id is required.'), { status: 400 })
+  }
+
+  return {
+    $or: [
+      { requesterId: userId, addresseeId },
+      { requesterId: addresseeId, addresseeId: userId },
+    ],
+  }
+}
+
+export function shouldAcceptReciprocalFriendship(friendship: ApiRecord, userId: string) {
+  return friendship.friendshipStatus === 'pending' && friendship.addresseeId === userId
+}
+
 export function idScopedQuery(id?: string): Filter<ApiRecord> {
   if (!id) {
     throw Object.assign(new Error('Invalid id.'), { status: 400 })

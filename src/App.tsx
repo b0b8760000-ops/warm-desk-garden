@@ -148,6 +148,14 @@ type StoredChatPost = ChatFeedPost & {
 }
 
 type AuthStatus = 'checking' | 'guest' | 'authenticated'
+type SendInviteResult = false | 'sent' | 'accepted' | 'duplicate' | 'self'
+
+function inviteResultMessage(result: Exclude<SendInviteResult, false>) {
+  if (result === 'accepted') return '你們已經成為好友，可以開始聊天與分享近況。'
+  if (result === 'duplicate') return '你們已經是好友或已有待處理的邀請。'
+  if (result === 'self') return '這是你自己的帳號，不需要加自己為好友。'
+  return '好友邀請已成功送出！請等待對方核准。'
+}
 
 const statusToneOptions: Array<{ value: FriendTone; label: string }> = [
   { value: 'green', label: '🟢 在線' },
@@ -688,7 +696,7 @@ function App() {
     }
   }
 
-  const handleSendInvite = async (email: string): Promise<boolean> => {
+  const handleSendInvite = async (email: string): Promise<SendInviteResult> => {
     if (!authUser) return false
     try {
       // 1. Search for profile by email
@@ -700,16 +708,23 @@ function App() {
       // 2. Prevent sending invite to oneself
       if (profile.id === authUser.id) {
         alert('不能加自己為好友喔！')
-        return true // Handled but no request sent
+        return 'self'
       }
 
-      // 3. Prevent duplicate requests
-      if (workspaceFriends.some(f => f.id === profile.id)) {
+      // 3. If the searched user already invited you, this action accepts that invite.
+      const existingFriendship = workspaceFriends.find(f => f.id === profile.id)
+      if (existingFriendship?.friendshipStatus === 'pending' && existingFriendship.isIncoming && existingFriendship.friendshipId) {
+        await handleAcceptInvite(existingFriendship.friendshipId)
+        return 'accepted'
+      }
+
+      // 4. Prevent duplicate outgoing requests or already accepted friendships.
+      if (existingFriendship) {
         alert('你們已經是好友或已有待處理的邀請！')
-        return true // Handled but no request sent
+        return 'duplicate'
       }
 
-      // 4. Create friendship request in MongoDB
+      // 5. Create friendship request in MongoDB. The backend merges reciprocal pending invites.
       const friendshipPayload: FriendshipRecord = {
         requesterId: authUser.id,
         requesterName: authUser.name,
@@ -729,7 +744,7 @@ function App() {
       const createdFriendship = await createWorkspaceRecord<FriendshipRecord>('friends', friendshipPayload)
       if (!createdFriendship) return false
 
-      // 5. Update local state
+      // 6. Update local state
       const newFriend: Friend = {
         id: profile.id,
         name: profile.name,
@@ -742,7 +757,7 @@ function App() {
         friendshipStatus: createdFriendship.friendshipStatus || 'pending',
         isIncoming: false
       }
-      setWorkspaceFriends(prev => [...prev, newFriend])
+      setWorkspaceFriends(prev => [...prev.filter(friend => friend.id !== profile.id), newFriend])
 
       // If friendship is already accepted (e.g. mock tests or instant matches), auto-create chat thread
       if (createdFriendship.friendshipStatus === 'accepted') {
@@ -752,7 +767,7 @@ function App() {
         })
         setActiveChatThreadId(profile.id)
       }
-      return true
+      return createdFriendship.friendshipStatus === 'accepted' ? 'accepted' : 'sent'
     } catch (err) {
       console.error('Failed to send friend request:', err)
       return false
@@ -4213,7 +4228,7 @@ interface FriendsPageProps {
   onOpenAddFriend: () => void
   onAcceptInvite: (friendshipId: string) => void
   onDeclineInvite: (friendshipId: string) => void
-  onSendInvite: (email: string) => Promise<boolean>
+  onSendInvite: (email: string) => Promise<SendInviteResult>
 }
 
 function FriendsPage({
@@ -4249,6 +4264,7 @@ function FriendsPage({
   const [isSearching, setIsSearching] = useState(false)
   const [isSendingInvite, setIsSendingInvite] = useState(false)
   const [inviteSentSuccess, setInviteSentSuccess] = useState(false)
+  const [inviteSuccessMessage, setInviteSuccessMessage] = useState('')
 
   const handleSearchUser = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -4257,6 +4273,7 @@ function FriendsPage({
     setSearchError('')
     setSearchResult(null)
     setInviteSentSuccess(false)
+    setInviteSuccessMessage('')
     try {
       const result = await callApi<UserProfile | null>('GET', `/profiles/search?email=${encodeURIComponent(inviteEmail.trim())}`)
       if (result) {
@@ -4278,6 +4295,7 @@ function FriendsPage({
     try {
       const ok = await onSendInvite(searchResult.email)
       if (ok) {
+        setInviteSuccessMessage(inviteResultMessage(ok))
         setInviteSentSuccess(true)
         setSearchResult(null)
         setInviteEmail('')
@@ -4769,7 +4787,7 @@ function FriendsPage({
 
                   {inviteSentSuccess && (
                     <div style={{ padding: '12px', background: 'rgba(92, 124, 89, 0.05)', color: '#4d694b', borderRadius: '4px', fontSize: '13px', border: '1px solid rgba(92, 124, 89, 0.15)', fontWeight: 'bold' }}>
-                      🎉 好友邀請已成功送出！請等待對方核准。
+                      🎉 {inviteSuccessMessage}
                     </div>
                   )}
 
@@ -6431,7 +6449,7 @@ function AddFriendModal({
   onSendInvite,
 }: {
   onClose: () => void
-  onSendInvite: (email: string) => Promise<boolean>
+  onSendInvite: (email: string) => Promise<SendInviteResult>
 }) {
   const [email, setEmail] = useState('')
   const [searchResult, setSearchResult] = useState<UserProfile | null>(null)
@@ -6439,6 +6457,7 @@ function AddFriendModal({
   const [isSearching, setIsSearching] = useState(false)
   const [isSending, setIsSending] = useState(false)
   const [sentSuccess, setSentSuccess] = useState(false)
+  const [successMessage, setSuccessMessage] = useState('')
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -6447,6 +6466,7 @@ function AddFriendModal({
     setSearchError('')
     setSearchResult(null)
     setSentSuccess(false)
+    setSuccessMessage('')
     try {
       const result = await callApi<UserProfile | null>('GET', `/profiles/search?email=${encodeURIComponent(email.trim())}`)
       if (result) {
@@ -6468,6 +6488,7 @@ function AddFriendModal({
     try {
       const ok = await onSendInvite(searchResult.email)
       if (ok) {
+        setSuccessMessage(inviteResultMessage(ok))
         setSentSuccess(true)
         setSearchResult(null)
         setEmail('')
@@ -6540,7 +6561,7 @@ function AddFriendModal({
 
         {sentSuccess && (
           <div style={{ padding: '12px', background: 'rgba(92, 124, 89, 0.05)', color: '#4d694b', borderRadius: '4px', fontSize: '13px', border: '1px solid rgba(92, 124, 89, 0.15)', fontWeight: 'bold', marginTop: '15px' }}>
-            🎉 好友邀請已成功送出！請等待對方核准。
+            🎉 {successMessage}
           </div>
         )}
 

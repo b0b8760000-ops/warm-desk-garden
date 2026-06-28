@@ -3,12 +3,14 @@ import { ObjectId } from 'mongodb'
 import { collections } from './collections.js'
 import { getDb } from './db.js'
 import {
+  friendshipPairQuery,
   idScopedQuery,
   matchRoute,
   normalizeDocument,
   ownerFields,
   ownerScopedQuery,
   scopedIdQuery,
+  shouldAcceptReciprocalFriendship,
   type ApiRecord,
 } from './routes.js'
 import { requireUser, type AuthenticatedRequest } from './auth.js'
@@ -118,6 +120,27 @@ apiRouter.all('*path', async (req, res, next) => {
 
       if (req.method === 'POST' && !route.id) {
         const now = new Date().toISOString()
+
+        if (route.collection === collections.friendships) {
+          const collection = db.collection<ApiRecord>(route.collection)
+          const existing = await collection.findOne(friendshipPairQuery(user.id, req.body.addresseeId))
+
+          if (existing) {
+            if (shouldAcceptReciprocalFriendship(existing, user.id)) {
+              const accepted = await collection.findOneAndUpdate(
+                idScopedQuery(String(existing._id ?? existing.id)),
+                { $set: { friendshipStatus: 'accepted', updatedAt: now } },
+                { returnDocument: 'after' },
+              )
+              res.status(200).json(normalizeDocument(accepted))
+              return
+            }
+
+            res.status(200).json(normalizeDocument(existing))
+            return
+          }
+        }
+
         const document = {
           ...req.body,
           ...ownerFields(route.collection, user.id),

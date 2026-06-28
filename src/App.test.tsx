@@ -845,6 +845,63 @@ describe('Warm Desk Garden app shell', () => {
     await user.click(screen.getByRole('button', { name: '關閉' }))
   })
 
+  it('accepts an existing incoming invite when adding that user from search', async () => {
+    const user = userEvent.setup()
+
+    apiMocks.callApi.mockImplementation((method: string, path: string, payload?: MockApiPayload) => {
+      if (method === 'GET' && path === '/friends') {
+        return Promise.resolve([
+          {
+            id: 'friendship-incoming-search',
+            requesterId: 'friend-456',
+            requesterName: '已邀請我的人',
+            requesterEmail: 'friend456@example.com',
+            requesterStatus: '等你接受邀請',
+            requesterTone: 'green',
+            addresseeId: 'user-1',
+            addresseeName: '學良',
+            addresseeEmail: 'garden@example.com',
+            friendshipStatus: 'pending',
+          },
+        ])
+      }
+      if (method === 'GET' && path.startsWith('/profiles/search')) {
+        return Promise.resolve({
+          id: 'friend-456',
+          name: '已邀請我的人',
+          email: 'friend456@example.com',
+          avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
+          status: '等你接受邀請',
+          tone: 'green',
+        })
+      }
+      if (method === 'PATCH' && path === '/friends/friendship-incoming-search') {
+        return Promise.resolve({ id: 'friendship-incoming-search', ...(payload ?? {}) })
+      }
+      if (method === 'GET') {
+        return Promise.resolve([])
+      }
+      return Promise.resolve(null)
+    })
+
+    await renderAuthenticatedApp()
+
+    await user.click(screen.getByRole('button', { name: '好友' }))
+    await user.click(screen.getAllByRole('button', { name: '邀請好友' })[0])
+    await user.type(screen.getByPlaceholderText('friend@example.com'), 'friend456@example.com')
+    await user.click(screen.getByRole('button', { name: '搜尋' }))
+    await user.click(await screen.findByRole('button', { name: '加為好友 ➕' }))
+
+    await waitFor(() => {
+      expect(apiMocks.callApi).toHaveBeenCalledWith(
+        'PATCH',
+        '/friends/friendship-incoming-search',
+        { friendshipStatus: 'accepted' },
+      )
+    })
+    expect(screen.getByText(/你們已經成為好友/)).toBeInTheDocument()
+  })
+
   it('opens a chat room from an accepted friend loaded from the backend', async () => {
     const user = userEvent.setup()
     mockWorkspaceSnapshot({
