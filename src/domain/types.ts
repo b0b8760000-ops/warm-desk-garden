@@ -82,6 +82,7 @@ export type Friend = {
   friendshipId?: string
   friendshipStatus?: 'pending' | 'accepted' | 'declined'
   isIncoming?: boolean
+  email?: string
 }
 
 export type Photo = {

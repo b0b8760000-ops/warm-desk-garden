@@ -627,6 +627,7 @@ function App() {
       const newFriend: Friend = {
         id: profile.id,
         name: profile.name,
+        email: profile.email,
         status: profile.status || '用手札記錄生活 ✏️',
         avatarUrl: profile.avatarUrl,
         tone: profile.tone || 'green',
@@ -990,6 +991,7 @@ function App() {
           return {
             id: isRequester ? f.addresseeId : (f.requesterId || f.id),
             name: isRequester ? f.addresseeName : f.requesterName,
+            email: isRequester ? f.addresseeEmail : f.requesterEmail,
             status: isRequester ? (f.addresseeStatus ?? '') : (f.requesterStatus ?? ''),
             avatarUrl: isRequester 
               ? (f.addresseeAvatarUrl ?? 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150') 
@@ -4891,22 +4893,45 @@ function FriendsPage({
                   {activeSubTab === '關於' && (
                     <div className="friend-about-section">
                       <div className="profile-grid">
-                        <div>
-                          <strong>生日</strong>
-                          <span>07月18日</span>
-                        </div>
-                        <div>
-                          <strong>所在地</strong>
-                          <span>台北市</span>
-                        </div>
-                        <div>
-                          <strong>興趣</strong>
-                          <span>旅行、攝影、閱讀、咖啡</span>
-                        </div>
-                        <div>
-                          <strong>備註</strong>
-                          <span>喜歡安靜的地方，推薦的展覽很用心。</span>
-                        </div>
+                        {activeFriend.email ? (
+                          <>
+                            <div>
+                              <strong>真實姓名 / 暱稱</strong>
+                              <span>{activeFriend.name}</span>
+                            </div>
+                            <div>
+                              <strong>聯絡信箱 (Email)</strong>
+                              <span>{activeFriend.email}</span>
+                            </div>
+                            <div>
+                              <strong>個人近況 / 座右銘</strong>
+                              <span>{activeFriend.status || '尚未設定狀態'}</span>
+                            </div>
+                            <div>
+                              <strong>在線狀態</strong>
+                              <span>{activeFriend.tone === 'green' ? '🟢 在線' : activeFriend.tone === 'amber' ? '🟡 忙碌' : '⚫ 離線'}</span>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div>
+                              <strong>生日</strong>
+                              <span>07月18日</span>
+                            </div>
+                            <div>
+                              <strong>所在地</strong>
+                              <span>台北市</span>
+                            </div>
+                            <div>
+                              <strong>興趣</strong>
+                              <span>旅行、攝影、閱讀、咖啡</span>
+                            </div>
+                            <div>
+                              <strong>備註</strong>
+                              <span>喜歡安靜的地方，推薦的展覽很用心。</span>
+                            </div>
+                          </>
+                        )}
                       </div>
 
                       <div className="profile-groups-editor-box">

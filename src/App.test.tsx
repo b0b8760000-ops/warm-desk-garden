@@ -1,4 +1,4 @@
-﻿import { render, screen, within } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -50,7 +50,7 @@ beforeEach(() => {
   authMocks.signOut.mockResolvedValue(undefined)
   authMocks.uploadUserFileForDisplay.mockRejectedValue(new Error('Storage unavailable in tests.'))
 
-  apiMocks.callApi.mockImplementation((method: string, path: string, payload?: any) => {
+  apiMocks.callApi.mockImplementation((_method: string, _path: string, _payload?: any) => {
     return Promise.resolve(null)
   })
 })
@@ -75,7 +75,7 @@ async function createFolderAndOpen(user: ReturnType<typeof userEvent.setup>, nam
 }
 
 async function createFriend(user: ReturnType<typeof userEvent.setup>, name = '聊天朋友') {
-  apiMocks.callApi.mockImplementation((method: string, path: string, payload?: any) => {
+  apiMocks.callApi.mockImplementation((method: string, path: string, _payload?: any) => {
     if (method === 'GET' && path.startsWith('/profiles/search')) {
       return Promise.resolve({
         id: 'friend-12345',
@@ -748,7 +748,7 @@ describe('Warm Desk Garden app shell', () => {
     const user = userEvent.setup()
     await renderAuthenticatedApp()
 
-    apiMocks.callApi.mockImplementation((method: string, path: string, payload?: any) => {
+    apiMocks.callApi.mockImplementation((method: string, path: string, _payload?: any) => {
       if (method === 'GET' && path.startsWith('/profiles/search')) {
         return Promise.resolve({
           id: 'friend-456',
