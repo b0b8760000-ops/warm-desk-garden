@@ -41,8 +41,6 @@ const fileUpload = multer({
   },
 })
 
-apiRouter.use(requireUser)
-
 function pickNotificationPatch(body: ApiRecord) {
   const allowed = new Set(['readAt', 'status'])
   return Object.fromEntries(Object.entries(body).filter(([key]) => allowed.has(key)))
@@ -68,6 +66,8 @@ async function getAcceptedFriendIds(userId: string) {
 apiRouter.get('/health', (_req, res) => {
   res.json({ ok: true })
 })
+
+apiRouter.use(requireUser)
 
 apiRouter.get('/me', (req, res) => {
   const user = (req as unknown as AuthenticatedRequest).currentUser

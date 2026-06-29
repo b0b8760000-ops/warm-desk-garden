@@ -4,6 +4,7 @@ import express, { type ErrorRequestHandler } from 'express'
 import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Server } from 'socket.io'
 import { apiRouter } from './api.js'
 import { getCurrentUserFromRequest } from './auth.js'
@@ -24,8 +25,16 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }))
 app.use('/api', apiRouter)
 
-const clientDistPath = path.resolve(process.cwd(), 'dist')
-if (process.env.NODE_ENV === 'production' && existsSync(clientDistPath)) {
+const serverDistDir = path.dirname(fileURLToPath(import.meta.url))
+const clientDistPath =
+  [
+    path.resolve(process.cwd(), 'dist'),
+    path.resolve(process.cwd(), '..', 'dist'),
+    path.resolve(serverDistDir, '..', '..', 'dist'),
+  ].find((candidate) => existsSync(path.join(candidate, 'index.html'))) ??
+  path.resolve(process.cwd(), 'dist')
+
+if (process.env.NODE_ENV === 'production' && existsSync(path.join(clientDistPath, 'index.html'))) {
   app.use(express.static(clientDistPath))
   app.get(/^(?!\/api)(?!\/socket\.io).*/, (_req, res) => {
     res.sendFile(path.join(clientDistPath, 'index.html'))
