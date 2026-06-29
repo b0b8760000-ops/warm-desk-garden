@@ -11258,3 +11258,159 @@ body {
 .event-form .submit-btn:hover {
   background: #736254;
 }
+.hidden-owner-control {
+  display: none !important;
+}
+
+.calendar-friend-picker {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  margin-top: 10px;
+  border: 1px solid rgba(126, 104, 79, 0.2);
+  background: rgba(255, 251, 242, 0.72);
+}
+
+.calendar-friend-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #4d3f2d;
+}
+
+.calendar-friend-option img {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.album-index-list {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 18px;
+}
+
+.album-index-card {
+  display: grid;
+  gap: 3px;
+  padding: 12px 14px;
+  border-left: 4px solid #9baa82;
+  background: rgba(255, 250, 239, 0.8);
+  box-shadow: 0 10px 26px rgba(70, 48, 25, 0.08);
+}
+
+.album-index-card strong {
+  color: #382c1e;
+}
+
+.album-index-card span,
+.album-index-card small {
+  color: #8a7a64;
+  font-size: 12px;
+}
+.sharing-control-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 126, 96, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 251, 244, 0.72);
+}
+
+.sharing-control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #5c4a35;
+  font-size: 13px;
+}
+
+.sharing-control-group span {
+  font-weight: 700;
+}
+
+.sharing-control-group button,
+.attachment-visibility-chip,
+.folder-share-chip {
+  border: 1px solid rgba(126, 105, 78, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #66523d;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+.sharing-control-group button.active,
+.attachment-visibility-chip:hover,
+.folder-share-chip:hover {
+  background: #e4eadb;
+  border-color: #9cac85;
+  color: #3f5a38;
+}
+
+.folder-share-chip {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.friend-shared-folders-panel {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid rgba(148, 126, 96, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 252, 246, 0.72);
+}
+
+.friend-shared-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  color: #4c3d2b;
+}
+
+.friend-shared-header span,
+.friend-shared-empty {
+  color: #8a7a66;
+  font-size: 13px;
+}
+
+.friend-shared-folder-list {
+  display: grid;
+  gap: 10px;
+}
+
+.friend-shared-folder-card {
+  border-left: 4px solid #9cac85;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 12px;
+}
+
+.friend-shared-folder-card > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.friend-shared-folder-card ul {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.friend-shared-folder-card li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #5c4a35;
+  font-size: 13px;
+}

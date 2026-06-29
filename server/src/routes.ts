@@ -12,8 +12,15 @@ export function matchRoute(path: string) {
   const routes: Record<string, CollectionName> = {
     folders: collections.folders,
     notes: collections.notes,
+    'note-attachments': collections.noteAttachments,
+    reflections: collections.reflections,
+    'reflection-photos': collections.reflectionPhotos,
     'chat-posts': collections.chatPosts,
+    'chat-replies': collections.chatReplies,
+    'chat-threads': collections.chatThreads,
+    'chat-messages': collections.chatMessages,
     friends: collections.friendships,
+    'friend-groups': collections.friendGroups,
     albums: collections.albums,
     photos: collections.photos,
   }
@@ -38,7 +45,18 @@ export function ownerScopedQuery(collection: string, userId: string): Filter<Api
     return { $or: [{ requesterId: userId }, { addresseeId: userId }] }
   }
 
-  if (collection === collections.chatPosts) {
+  if (
+    collection === collections.folders ||
+    collection === collections.notes ||
+    collection === collections.noteAttachments ||
+    collection === collections.chatPosts ||
+    collection === collections.chatReplies ||
+    collection === collections.chatThreads ||
+    collection === collections.chatMessages ||
+    collection === collections.albums ||
+    collection === collections.photos ||
+    collection === collections.reflectionPhotos
+  ) {
     return { $or: [{ ownerId: userId }, { visibleToUserIds: userId }] }
   }
 

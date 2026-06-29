@@ -2,7 +2,7 @@
 
 React + Vite + TypeScript prototype for a gentle personal notes, folders,
 chat, friends, albums, and calendar app. The backend architecture is MongoDB
-Atlas first, with Appwrite for Auth, Storage, Functions, and Email Messaging.
+Atlas first, with Appwrite for Auth, Storage, and Email Messaging.
 The app starts with an empty workspace by default; there is no restore-demo
 entry point in the product UI.
 
@@ -21,7 +21,7 @@ Open `http://127.0.0.1:5173`.
 npm test
 npm run lint
 npm run build
-npx tsc -p functions/api/tsconfig.json
+npm run server:build
 ```
 
 ## Environment
@@ -35,9 +35,6 @@ For the full MongoDB Atlas + Appwrite Cloud education setup using GitHub
 ```text
 VITE_APPWRITE_ENDPOINT=https://sgp.cloud.appwrite.io/v1
 VITE_APPWRITE_PROJECT_ID=6a39ed84003504b380f9
-VITE_APPWRITE_BUCKET_ID=warm-desk-garden-files
-VITE_APPWRITE_API_FUNCTION_ID=warm-desk-garden-api
-VITE_RENDER_API_URL=https://defect-system-bco5.onrender.com
 ```
 
 Do not put backend secrets in frontend `.env.local`. For local backend setup,
@@ -47,38 +44,47 @@ keep that file out of Git:
 ```text
 MONGODB_URI
 APPWRITE_API_KEY
+APPWRITE_BUCKET_ID=warm-desk-garden-files
 MONGODB_DB_NAME=warm_desk_garden
 APPWRITE_ENDPOINT=https://sgp.cloud.appwrite.io/v1
 APPWRITE_PROJECT_ID=6a39ed84003504b380f9
 APPWRITE_EMAIL_TOPIC_ID
 ```
 
-For GitHub deployment later, add the same secret names in GitHub repository
-Secrets instead of committing any `.env` file that contains real values.
+For Render deployment, add the same secret names in Render Environment
+Variables instead of committing any `.env` file that contains real values.
 
 Email/Gmail reminders use Appwrite Messaging through an Email provider or SMTP.
 Firebase is intentionally not part of the first version.
 
 ## Data Model
 
-MongoDB collections used by the Function API:
+MongoDB collections used by the Render API:
 
-- `profiles`, `folders`, `notes`
-- `chatPosts`, `chatReplies`
-- `friendships`
+- `profiles`, `friendships`, `friendGroups`
+- `folders`, `notes`, `noteAttachments`
+- `reflections`, `reflectionPhotos`
+- `chatPosts`, `chatReplies`, `chatThreads`, `chatMessages`
 - `albums`, `photos`
 - `calendarEvents`, `calendarTasks`, `eventInvites`
 - `notifications`, `reminderJobs`
 
-## Appwrite Function
+## API Routes
 
-The legacy Appwrite Function lives in `functions/api` and exposes routes for:
+The Render backend exposes routes for:
 
 - `/me`
 - `/folders`
 - `/notes`
+- `/note-attachments`
+- `/reflections`
+- `/reflection-photos`
 - `/chat-posts`
+- `/chat-replies`
+- `/chat-threads`
+- `/chat-messages`
 - `/friends`
+- `/friend-groups`
 - `/albums`
 - `/photos`
 - `/calendar/events`
@@ -86,32 +92,23 @@ The legacy Appwrite Function lives in `functions/api` and exposes routes for:
 - `/calendar/invites`
 - `/notifications`
 
-Deploy and configure the backend with:
+- `/files`
 
-```powershell
-.\scripts\appwrite-bootstrap.ps1
-```
+## Render Deployment
 
-The script creates the Appwrite Storage bucket, creates the Function, writes the
-Function variables, writes `.env.local`, and deploys `functions/api`.
-
-## Render Backend
-
-The Render backend lives in `server` and is the preferred backend for realtime
-chat. The current free deployment reuses the existing Render service URL:
-
-```text
-https://defect-system-bco5.onrender.com
-```
+Render is the only public deployment target. It serves both the React app and
+the backend API from one Web Service.
 
 ```bash
+npm run build
 npm run server:build
 npm run server:start
 ```
 
-For a new Render account or a paid setup, `render.yaml` describes:
+`render.yaml` describes:
 
-- `warm-desk-garden-api`: free Render Web Service for Express API + Socket.IO.
+- `warm-desk-garden`: free Render Web Service for React static files, Express
+  API, and Socket.IO.
 
 The worker and cron source files are kept in `server/src`, but they are not
 enabled in `render.yaml` because the current deployment path avoids paid Render
@@ -120,12 +117,19 @@ resources and payment-method prompts.
 Set these Render environment variables:
 
 ```text
+VITE_APPWRITE_ENDPOINT=https://sgp.cloud.appwrite.io/v1
+VITE_APPWRITE_PROJECT_ID=6a39ed84003504b380f9
 APPWRITE_ENDPOINT=https://sgp.cloud.appwrite.io/v1
 APPWRITE_PROJECT_ID=6a39ed84003504b380f9
 APPWRITE_API_KEY=
+APPWRITE_BUCKET_ID=warm-desk-garden-files
 MONGODB_URI=
 MONGODB_DB_NAME=warm_desk_garden
-CORS_ORIGIN=https://b0b8760000-ops.github.io
 ```
 
-If the Render API URL changes, update frontend `VITE_RENDER_API_URL` to match.
+File uploads go through `POST /api/files`. The browser sends a file and
+optional friend IDs; Render verifies the Appwrite session, checks accepted
+friends in MongoDB, and then creates the Appwrite Storage file permissions.
+The response includes file metadata (`fileId`, `bucketId`, `storagePath`,
+`category`, `url`, `mimeType`, `size`, and `originalName`) that should be saved
+in MongoDB records such as `noteAttachments`, `photos`, or `reflectionPhotos`.

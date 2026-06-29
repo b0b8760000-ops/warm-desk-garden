@@ -5,7 +5,6 @@ import {
   registerWithEmail,
   signInWithEmail,
   signOut,
-  uploadUserFileForDisplay,
   updateUserName,
   type AuthUser,
 } from './services/appwriteClient'
@@ -15,7 +14,7 @@ import {
   loadWorkspaceSnapshot,
   updateWorkspaceRecord,
 } from './services/workspaceApi'
-import { callApi } from './services/apiClient'
+import { callApi, uploadFile, uploadFileForDisplay, type UploadedFileMetadata } from './services/apiClient'
 import {
   Bell,
   CalendarDays,
@@ -37,7 +36,9 @@ import {
   Users,
 } from 'lucide-react'
 import './App.css'
-import type { Folder as FolderModel, Note as NoteModel, Friend, FriendGroup, ChatThread, ChatThreadMessage, Album, Photo, FriendPhoto, CalendarEvent, CalendarTask } from './domain/types'
+import type { Folder as FolderModel, Note as NoteModel, Friend, FriendGroup, ChatThread, ChatThreadMessage, Album, Photo, FriendPhoto, CalendarEvent, CalendarTask, PhotoComment } from './domain/types'
+import { getAcceptedFriendIds, getAcceptedFriends } from './domain/friends'
+import { addPhotoComment, isPhotoLikedBy, togglePhotoLikeForUser } from './domain/photoInteractions'
 
 const navItems = [
   { label: '首頁', icon: Home },
@@ -62,15 +63,26 @@ type RetroLightboxItem = {
   title: string
   isLiked: boolean
   isFriendPhoto: boolean
+  likedByUserIds?: string[]
+  comments?: PhotoComment[]
 }
 
 type NoteAttachment = {
   id: string
+  noteId?: string
   name: string
   originalName?: string
   kind: 'photo' | 'pdf'
   url: string
   sizeLabel: string
+  visibility?: 'private' | 'shared'
+  visibleToUserIds?: string[]
+  fileId?: string
+  bucketId?: string
+  storagePath?: string
+  category?: string
+  mimeType?: string
+  size?: number
 }
 
 type WorkspaceNote = NoteModel & {
@@ -80,6 +92,8 @@ type WorkspaceNote = NoteModel & {
 type AttachFileResult =
   | { ok: true; attachment: NoteAttachment }
   | { ok: false; message: string }
+
+type ShareVisibility = 'private' | 'shared'
 
 type ChatComment = {
   id: string
@@ -149,12 +163,39 @@ type StoredChatPost = ChatFeedPost & {
 
 type AuthStatus = 'checking' | 'guest' | 'authenticated'
 type SendInviteResult = false | 'sent' | 'accepted' | 'duplicate' | 'self'
+type CalendarInvitePreview = {
+  id: string
+  title: string
+  host: string
+  date: string
+  time: string
+}
 
 function inviteResultMessage(result: Exclude<SendInviteResult, false>) {
   if (result === 'accepted') return '你們已經成為好友，可以開始聊天與分享近況。'
   if (result === 'duplicate') return '你們已經是好友或已有待處理的邀請。'
   if (result === 'self') return '這是你自己的帳號，不需要加自己為好友。'
   return '好友邀請已成功送出！請等待對方核准。'
+}
+
+function toFriendPhoto(photo: Photo): FriendPhoto {
+  return {
+    id: photo.id,
+    author: photo.ownerName || '好友',
+    avatarUrl: photo.ownerAvatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150',
+    imageUrl: photo.imageUrl,
+    title: photo.title,
+    weekNum: photo.weekNum || 1,
+    date: photo.dayOfWeek || '週一',
+    location: photo.location || '',
+    isLiked: !!photo.isStarred,
+    likedByUserIds: photo.likedByUserIds,
+    comments: photo.comments,
+  }
+}
+
+function createClientId(prefix: string) {
+  return `${prefix}-${Date.now()}`
 }
 
 const statusToneOptions: Array<{ value: FriendTone; label: string }> = [
@@ -256,16 +297,38 @@ function getLocalFileUrl(file: File) {
   return ''
 }
 
-async function getStoredFileUrl(file: File) {
+async function getStoredFileUrl(file: File, readUserIds: string[] = [], category = 'notes') {
   if (isAppwriteConfigured) {
     try {
-      return await uploadUserFileForDisplay(file)
+      return await uploadFileForDisplay(file, readUserIds, category)
     } catch (error) {
-      console.warn('Appwrite file upload unavailable, using local preview.', error)
+      console.warn('Render file upload unavailable, using local preview.', error)
     }
   }
 
   return getLocalFileUrl(file)
+}
+
+async function getStoredFileMetadata(
+  file: File,
+  readUserIds: string[] = [],
+  category = 'notes',
+): Promise<UploadedFileMetadata> {
+  if (isAppwriteConfigured) {
+    try {
+      return await uploadFile(file, readUserIds, category)
+    } catch (error) {
+      console.warn('Render file upload unavailable, using local preview.', error)
+    }
+  }
+
+  return {
+    url: getLocalFileUrl(file),
+    category,
+    mimeType: file.type,
+    size: file.size,
+    originalName: file.name,
+  }
 }
 
 function getAuthDisplayName(user: AuthUser) {
@@ -295,7 +358,7 @@ function AuthPage({ status, onSignIn, onRegister }: AuthPageProps) {
     setMessage('')
 
     if (!isAppwriteConfigured) {
-      setMessage('Appwrite 尚未設定，請先確認 .env.local 與 GitHub Pages 環境變數。')
+      setMessage('Appwrite 尚未設定，請先確認 .env.local 或 Render 環境變數。')
       return
     }
 
@@ -496,12 +559,12 @@ function App() {
   const [activeChatThreadId, setActiveChatThreadId] = useState('')
   const [chatActiveTab, setChatActiveTab] = useState<string>('全部')
   const acceptedWorkspaceFriends = useMemo(
-    () => workspaceFriends.filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus),
+    () => getAcceptedFriends(workspaceFriends),
     [workspaceFriends],
   )
 
   const getAcceptedFriendIdsForSharing = async () => {
-    const loadedFriendIds = acceptedWorkspaceFriends.map(f => f.id).filter(Boolean)
+    const loadedFriendIds = getAcceptedFriendIds(acceptedWorkspaceFriends)
     if (loadedFriendIds.length > 0 || !authUser) {
       return loadedFriendIds
     }
@@ -509,7 +572,7 @@ function App() {
     try {
       const rawFriendships = await callApi<FriendshipRecord[]>('GET', '/friends')
       return rawFriendships
-        .filter((friendship) => friendship.friendshipStatus === 'accepted' || !friendship.friendshipStatus)
+        .filter((friendship) => friendship.friendshipStatus === 'accepted')
         .map((friendship) => {
           const isRequester = friendship.requesterId
             ? friendship.requesterId === authUser.id
@@ -622,7 +685,7 @@ function App() {
   const ensureChatThreadForTarget = (targetId: string) => {
     const targetFriend = workspaceFriends.find((friend) => friend.id === targetId)
     if (targetFriend) {
-      if (targetFriend.friendshipStatus === 'pending') return false
+      if (targetFriend.friendshipStatus !== 'accepted') return false
       setChatThreads((prev) =>
         prev.some((thread) => thread.id === targetId)
           ? prev
@@ -782,8 +845,9 @@ function App() {
     weekNum?: number,
     location?: string
   ) => {
+    const visibleToUserIds = getAcceptedFriendIds(acceptedWorkspaceFriends)
     const newAlbum: Album = {
-      id: `album-${Date.now()}`,
+      id: createClientId('album'),
       title,
       description,
       date: formatDisplayDate(new Date()),
@@ -791,18 +855,26 @@ function App() {
       themeColor,
       photoIds: [],
       weekNum: weekNum || 27,
-      location: location || ''
+      location: location || '',
+      ownerId: authUser?.id,
+      ownerName: authUser?.name || userName,
+      ownerAvatarUrl: userAvatarUrl,
+      visibleToUserIds,
     }
     setWorkspaceAlbums(prev => [...prev, newAlbum])
     syncCreateRecord('albums', newAlbum)
   }
 
   const handleDeleteAlbum = (albumId: string) => {
+    const targetAlbum = workspaceAlbums.find((album) => album.id === albumId)
+    if (targetAlbum?.ownerId && targetAlbum.ownerId !== authUser?.id) return
     setWorkspaceAlbums(prev => prev.filter(a => a.id !== albumId))
     syncDeleteRecord('albums', albumId)
   }
 
   const handleUpdateAlbumInfo = (albumId: string, title: string, description: string) => {
+    const targetAlbum = workspaceAlbums.find((album) => album.id === albumId)
+    if (targetAlbum?.ownerId && targetAlbum.ownerId !== authUser?.id) return
     setWorkspaceAlbums(prev => prev.map(a => a.id === albumId ? { ...a, title, description } : a))
     syncUpdateRecord<Album>('albums', albumId, { title, description })
   }
@@ -815,7 +887,10 @@ function App() {
     dayOfWeek?: string,
     location?: string
   ) => {
-    const photoId = `photo-${Date.now()}`
+    const photoId = createClientId('photo')
+    const visibleToUserIds = getAcceptedFriendIds(acceptedWorkspaceFriends)
+    const targetAlbum = workspaceAlbums.find((album) => album.id === albumId)
+    if (targetAlbum?.ownerId && targetAlbum.ownerId !== authUser?.id) return
     const newPhoto: Photo = {
       id: photoId,
       title,
@@ -824,7 +899,13 @@ function App() {
       tapeColor: styleType === 'polaroid' ? 'olive' : styleType === 'scalloped' ? 'rose' : 'stripe',
       isStarred: false,
       dayOfWeek: dayOfWeek || '週一',
-      location: location || ''
+      location: location || '',
+      ownerId: authUser?.id,
+      ownerName: authUser?.name || userName,
+      ownerAvatarUrl: userAvatarUrl,
+      visibleToUserIds,
+      albumTitle: targetAlbum?.title,
+      weekNum: targetAlbum?.weekNum,
     }
     setWorkspacePhotos(prev => [...prev, newPhoto])
     syncCreateRecord('photos', newPhoto)
@@ -839,16 +920,18 @@ function App() {
           : a
       )
     )
-    const targetAlbum = workspaceAlbums.find((album) => album.id === albumId)
     if (targetAlbum) {
       syncUpdateRecord<Album>('albums', albumId, {
         photoIds: [...targetAlbum.photoIds, photoId],
         coverUrl: targetAlbum.photoIds.length === 0 ? imageUrl : targetAlbum.coverUrl,
+        visibleToUserIds,
       })
     }
   }
 
   const handleDeletePhotoFromAlbum = (albumId: string, photoId: string) => {
+    const targetAlbum = workspaceAlbums.find((album) => album.id === albumId)
+    if (targetAlbum?.ownerId && targetAlbum.ownerId !== authUser?.id) return
     setWorkspaceAlbums(prev =>
       prev.map(a => {
         if (a.id === albumId) {
@@ -863,7 +946,6 @@ function App() {
         return a
       })
     )
-    const targetAlbum = workspaceAlbums.find((album) => album.id === albumId)
     if (targetAlbum) {
       syncUpdateRecord<Album>('albums', albumId, {
         photoIds: targetAlbum.photoIds.filter((id) => id !== photoId),
@@ -872,12 +954,15 @@ function App() {
   }
 
   const handleUpdatePhotoTitle = (photoId: string, newTitle: string) => {
+    const targetPhoto = workspacePhotos.find((photo) => photo.id === photoId)
+    if (targetPhoto?.ownerId && targetPhoto.ownerId !== authUser?.id) return
     setWorkspacePhotos(prev => prev.map(p => p.id === photoId ? { ...p, title: newTitle } : p))
     syncUpdateRecord<Photo>('photos', photoId, { title: newTitle })
   }
 
   const handleToggleStarPhoto = (photoId: string) => {
     const targetPhoto = workspacePhotos.find((photo) => photo.id === photoId)
+    if (targetPhoto?.ownerId && targetPhoto.ownerId !== authUser?.id) return
     const nextStarred = !targetPhoto?.isStarred
     setWorkspacePhotos(prev => prev.map(p => p.id === photoId ? { ...p, isStarred: nextStarred } : p))
     syncUpdateRecord<Photo>('photos', photoId, { isStarred: nextStarred })
@@ -997,10 +1082,14 @@ function App() {
     }
   }, [])
 
-  const completeAuth = useCallback(async (user: AuthUser) => {
+  const completeAuth = useCallback(async (user: AuthUser, options?: { waitForProfile?: boolean }) => {
     setAuthUser(user)
     setUserName(getAuthDisplayName(user))
-    await syncOwnProfile(user)
+    if (options?.waitForProfile) {
+      await syncOwnProfile(user)
+    } else {
+      void syncOwnProfile(user)
+    }
     setHasRemoteSession(true)
     setAuthStatus('authenticated')
   }, [syncOwnProfile])
@@ -1029,7 +1118,7 @@ function App() {
   }
 
   const handleRegister = async (email: string, password: string, name: string) => {
-    await completeAuth(await registerWithEmail(email, password, name))
+    await completeAuth(await registerWithEmail(email, password, name), { waitForProfile: true })
   }
 
   const handleSignOut = async () => {
@@ -1094,8 +1183,23 @@ function App() {
           console.error('Failed to load current user profile:', err)
         }
 
-        setWorkspaceFolders(snapshot.folders as FolderModel[])
-        setWorkspaceNotes(snapshot.notes as WorkspaceNote[])
+        const loadedFolders = snapshot.folders as FolderModel[]
+        const loadedNoteAttachments = snapshot.noteAttachments as NoteAttachment[]
+        const loadedNotes = (snapshot.notes as WorkspaceNote[]).map((note) => {
+          const standaloneAttachments = loadedNoteAttachments.filter((attachment) => attachment.noteId === note.id)
+          const embeddedAttachments = note.attachments ?? []
+          const embeddedIds = new Set(embeddedAttachments.map((attachment) => attachment.id))
+
+          return {
+            ...note,
+            attachments: [
+              ...embeddedAttachments,
+              ...standaloneAttachments.filter((attachment) => !embeddedIds.has(attachment.id)),
+            ],
+          }
+        })
+        setWorkspaceFolders(loadedFolders)
+        setWorkspaceNotes(loadedNotes)
         
         // Map raw friendships from MongoDB to Friend objects
         const rawFriendships = snapshot.friends as FriendshipRecord[]
@@ -1120,8 +1224,15 @@ function App() {
         })
         setWorkspaceFriends(formattedFriends)
         
-        setWorkspaceAlbums(snapshot.albums as Album[])
-        setWorkspacePhotos(snapshot.photos as Photo[])
+        const loadedAlbums = snapshot.albums as Album[]
+        const loadedPhotos = snapshot.photos as Photo[]
+        setWorkspaceAlbums(loadedAlbums)
+        setWorkspacePhotos(loadedPhotos)
+        setWorkspaceFriendPhotos(
+          loadedPhotos
+            .filter((photo) => photo.ownerId && photo.ownerId !== authUser.id)
+            .map(toFriendPhoto),
+        )
         const mappedPosts = ((snapshot.chatPosts as StoredChatPost[]) || []).map(p => ({
           ...p,
           editable: p.ownerId === authUser.id
@@ -1165,14 +1276,30 @@ function App() {
 
   const showRightRail = activeSection === '首頁'
 
+  const currentUserId = authUser?.id ?? ''
+  const ownedWorkspaceFolders = useMemo(
+    () => workspaceFolders.filter((folder) => !folder.ownerId || folder.ownerId === currentUserId),
+    [workspaceFolders, currentUserId],
+  )
+  const ownedWorkspaceNotes = useMemo(
+    () => workspaceNotes.filter((note) => !note.ownerId || note.ownerId === currentUserId),
+    [workspaceNotes, currentUserId],
+  )
+
+  const getSharedFriendIds = (visibility: ShareVisibility) =>
+    visibility === 'shared' ? getAcceptedFriendIds(acceptedWorkspaceFriends) : []
+
   const handleAddFolder = (folderName?: string) => {
-    const customFolderCount = workspaceFolders.filter((folder) => folder.id.startsWith('custom-folder-')).length
+    const customFolderCount = ownedWorkspaceFolders.filter((folder) => folder.id.startsWith('custom-folder-')).length
     const trimmedName = folderName?.trim()
     const nextFolder: FolderModel = {
       id: `custom-folder-${Date.now()}`,
       name: trimmedName || `新資料夾 ${customFolderCount + 1}`,
       count: 0,
       color: ['sage', 'sand', 'blue', 'rose', 'cream', 'brown'][customFolderCount % 6],
+      ownerId: currentUserId,
+      visibility: 'private',
+      visibleToUserIds: [],
     }
 
     setWorkspaceFolders((current) => [nextFolder, ...current])
@@ -1181,9 +1308,12 @@ function App() {
   }
 
   const handleCreateNote = (folderName: string) => {
-    const folderNoteCount = workspaceNotes.filter((note) => note.folder === folderName).length
+    const targetFolder = ownedWorkspaceFolders.find((folder) => folder.name === folderName)
+    const folderNoteCount = ownedWorkspaceNotes.filter((note) => note.folder === folderName).length
     const newNote: WorkspaceNote = {
       id: `local-note-${Date.now()}`,
+      ownerId: currentUserId,
+      folderId: targetFolder?.id,
       title: `${folderName}新筆記 ${folderNoteCount + 1}`,
       excerpt: '先把照片或 PDF 放進來，之後可以再補上文字整理。',
       folder: folderName,
@@ -1193,6 +1323,8 @@ function App() {
       likeCount: 0,
       fileCount: 0,
       attachments: [],
+      visibility: 'private',
+      visibleToUserIds: [],
     }
 
     setWorkspaceNotes((current) => [newNote, ...current])
@@ -1206,11 +1338,38 @@ function App() {
     return newNote
   }
 
-  const handleUpdateNote = (noteId: string, patch: Partial<Pick<WorkspaceNote, 'title' | 'excerpt' | 'date'>>) => {
+  const handleUpdateFolderVisibility = (folderId: string, visibility: ShareVisibility) => {
+    const visibleToUserIds = getSharedFriendIds(visibility)
+    const patch: Partial<FolderModel> = { visibility, visibleToUserIds }
+    setWorkspaceFolders((current) =>
+      current.map((folder) => (folder.id === folderId ? { ...folder, ...patch } : folder)),
+    )
+    syncUpdateRecord<FolderModel>('folders', folderId, patch)
+  }
+
+  const handleUpdateNote = (
+    noteId: string,
+    patch: Partial<Pick<WorkspaceNote, 'title' | 'excerpt' | 'date' | 'visibility' | 'visibleToUserIds'>>,
+  ) => {
     setWorkspaceNotes((current) =>
       current.map((note) => (note.id === noteId ? { ...note, ...patch } : note)),
     )
     syncUpdateRecord<WorkspaceNote>('notes', noteId, patch)
+  }
+
+  const handleUpdateNoteVisibility = (noteId: string, visibility: ShareVisibility) => {
+    const targetNote = workspaceNotes.find((note) => note.id === noteId)
+    const visibleToUserIds = getSharedFriendIds(visibility)
+    handleUpdateNote(noteId, { visibility, visibleToUserIds })
+
+    if (visibility === 'shared') {
+      const folderId =
+        targetNote?.folderId ??
+        ownedWorkspaceFolders.find((folder) => folder.name === targetNote?.folder)?.id
+      if (folderId) {
+        handleUpdateFolderVisibility(folderId, 'shared')
+      }
+    }
   }
 
   const handleDeleteNote = (noteId: string) => {
@@ -1230,7 +1389,12 @@ function App() {
     }
   }
 
-  const handleAttachFile = async (noteId: string, file: File, kind: 'photo' | 'pdf'): Promise<AttachFileResult> => {
+  const handleAttachFile = async (
+    noteId: string,
+    file: File,
+    kind: 'photo' | 'pdf',
+    visibility: ShareVisibility = 'private',
+  ): Promise<AttachFileResult> => {
     const isValidPhoto = kind === 'photo' && file.type.startsWith('image/')
     const isValidPdf = kind === 'pdf' && file.type === 'application/pdf'
 
@@ -1238,13 +1402,22 @@ function App() {
       return { ok: false, message: '目前只接受照片與 PDF 檔案。' }
     }
 
-    const fileUrl = await getStoredFileUrl(file)
+    const visibleToUserIds = getSharedFriendIds(visibility)
+    const uploadedFile = await getStoredFileMetadata(
+      file,
+      visibleToUserIds,
+      kind === 'pdf' ? 'pdfs' : 'notes',
+    )
     const attachment: NoteAttachment = {
       id: `attachment-${Date.now()}-${file.name}`,
+      noteId,
       name: file.name,
       kind,
-      url: fileUrl,
+      ...uploadedFile,
+      url: uploadedFile.url,
       sizeLabel: formatFileSize(file.size),
+      visibility,
+      visibleToUserIds,
     }
 
     const targetNote = workspaceNotes.find((note) => note.id === noteId)
@@ -1265,6 +1438,7 @@ function App() {
 
     if (updatedNote) {
       syncUpdateRecord<WorkspaceNote>('notes', noteId, updatedNote)
+      syncCreateRecord('note-attachments', attachment)
     }
 
     return { ok: true, attachment }
@@ -1288,6 +1462,7 @@ function App() {
 
     if (updatedNote) {
       syncUpdateRecord<WorkspaceNote>('notes', noteId, updatedNote)
+      syncDeleteRecord('note-attachments', attachmentId)
     }
   }
 
@@ -1318,6 +1493,38 @@ function App() {
 
     if (updatedNote) {
       syncUpdateRecord<WorkspaceNote>('notes', noteId, updatedNote)
+      syncUpdateRecord<NoteAttachment>('note-attachments', attachmentId, { name: newName })
+    }
+  }
+
+  const handleUpdateAttachmentVisibility = (
+    noteId: string,
+    attachmentId: string,
+    visibility: ShareVisibility,
+  ) => {
+    const visibleToUserIds = getSharedFriendIds(visibility)
+    const targetNote = workspaceNotes.find((note) => note.id === noteId)
+    const updatedNote = targetNote
+      ? {
+          ...targetNote,
+          attachments: (targetNote.attachments ?? []).map((attachment) =>
+            attachment.id === attachmentId
+              ? { ...attachment, visibility, visibleToUserIds }
+              : attachment,
+          ),
+        }
+      : null
+
+    setWorkspaceNotes((current) =>
+      current.map((note) => (note.id === noteId && updatedNote ? updatedNote : note)),
+    )
+
+    if (updatedNote) {
+      syncUpdateRecord<WorkspaceNote>('notes', noteId, updatedNote)
+      syncUpdateRecord<NoteAttachment>('note-attachments', attachmentId, {
+        visibility,
+        visibleToUserIds,
+      })
     }
   }
 
@@ -1338,15 +1545,43 @@ function App() {
   }
 
   const handleAddCalendarEvent = (newEvent: CalendarEvent) => {
+    if (hasRemoteSession) {
+      void createWorkspaceRecord<CalendarEvent>('calendar/events', newEvent)
+        .then((savedEvent) => {
+          if (savedEvent) setWorkspaceEvents((prev) => [...prev, savedEvent])
+        })
+        .catch((error) => {
+          console.warn('Failed to create calendar event.', error)
+          setWorkspaceEvents((prev) => [...prev, newEvent])
+        })
+      return
+    }
+
     setWorkspaceEvents((prev) => [...prev, newEvent])
-    syncCreateRecord('calendar/events', newEvent)
   }
 
   const handleUpdateCalendarEvent = (updatedEvent: CalendarEvent) => {
+    if (hasRemoteSession) {
+      void updateWorkspaceRecord<CalendarEvent>('calendar/events', updatedEvent.id, updatedEvent)
+        .then((savedEvent) => {
+          if (savedEvent) {
+            setWorkspaceEvents((prev) =>
+              prev.map((event) => (event.id === updatedEvent.id ? savedEvent : event)),
+            )
+          }
+        })
+        .catch((error) => {
+          console.warn('Failed to update calendar event.', error)
+          setWorkspaceEvents((prev) =>
+            prev.map((event) => (event.id === updatedEvent.id ? updatedEvent : event)),
+          )
+        })
+      return
+    }
+
     setWorkspaceEvents((prev) =>
       prev.map((event) => (event.id === updatedEvent.id ? updatedEvent : event)),
     )
-    syncUpdateRecord<CalendarEvent>('calendar/events', updatedEvent.id, updatedEvent)
   }
 
   const handleDeleteCalendarEvent = (eventId: string) => {
@@ -1378,6 +1613,68 @@ function App() {
     }))
     syncUpdateRecord<CalendarTask>('calendar/tasks', taskId, {
       completedAt: nextCompleted ? new Date().toISOString() : null,
+    })
+  }
+
+  const applyPhotoInteraction = (photo: Photo) => {
+    setWorkspacePhotos((prev) => prev.map((item) => (item.id === photo.id ? photo : item)))
+    setWorkspaceFriendPhotos((prev) =>
+      prev.map((item) =>
+        item.id === photo.id
+          ? {
+              ...item,
+              isLiked: authUser ? isPhotoLikedBy(photo, authUser.id) : !!photo.isStarred,
+              likedByUserIds: photo.likedByUserIds,
+              comments: photo.comments,
+            }
+          : item,
+      ),
+    )
+    setActiveLightboxItems((prev) =>
+      prev
+        ? prev.map((item) =>
+            item.id === photo.id
+              ? {
+                  ...item,
+                  isLiked: authUser ? isPhotoLikedBy(photo, authUser.id) : !!photo.isStarred,
+                  likedByUserIds: photo.likedByUserIds,
+                  comments: photo.comments,
+                }
+              : item,
+          )
+        : prev,
+    )
+  }
+
+  const handleToggleRetroPhotoLike = (photoId: string) => {
+    if (!authUser) return
+    const targetPhoto = workspacePhotos.find((photo) => photo.id === photoId)
+    if (!targetPhoto) return
+
+    const updatedPhoto = togglePhotoLikeForUser(targetPhoto, authUser.id)
+    applyPhotoInteraction(updatedPhoto)
+    syncUpdateRecord<Photo>('photos', photoId, {
+      likedByUserIds: updatedPhoto.likedByUserIds,
+      isStarred: updatedPhoto.isStarred,
+    })
+  }
+
+  const handleAddRetroPhotoComment = (photoId: string, text: string) => {
+    if (!authUser) return
+    const targetPhoto = workspacePhotos.find((photo) => photo.id === photoId)
+    if (!targetPhoto) return
+
+    const updatedPhoto = addPhotoComment(targetPhoto, {
+      id: createClientId('photo-comment'),
+      authorId: authUser.id,
+      author: authUser.name || userName || '我',
+      avatarUrl: userAvatarUrl,
+      timeLabel: '剛剛',
+      text,
+    })
+    applyPhotoInteraction(updatedPhoto)
+    syncUpdateRecord<Photo>('photos', photoId, {
+      comments: updatedPhoto.comments,
     })
   }
 
@@ -1416,6 +1713,10 @@ function App() {
 
   const handleDeleteChatPost = (postId: string) => {
     syncDeleteRecord('chat-posts', postId)
+  }
+
+  const uploadSharedFileForAcceptedFriends = async (file: File, category = 'chat') => {
+    return getStoredFileUrl(file, await getAcceptedFriendIdsForSharing(), category)
   }
 
   if (authStatus !== 'authenticated') {
@@ -1508,8 +1809,8 @@ function App() {
           <DeskSurface
             userName={userName}
             setUserName={setUserName}
-            folders={workspaceFolders}
-            notes={workspaceNotes}
+            folders={ownedWorkspaceFolders}
+            notes={ownedWorkspaceNotes}
             photos={workspacePhotos}
             friends={acceptedWorkspaceFriends}
             events={workspaceEvents}
@@ -1523,8 +1824,9 @@ function App() {
 
         {activeSection === '資料夾' ? (
           <FoldersPage
-            folders={workspaceFolders}
+            folders={ownedWorkspaceFolders}
             onAddFolder={handleAddFolder}
+            onUpdateFolderVisibility={handleUpdateFolderVisibility}
             onOpenFolderNotes={(folderId) => {
               setSelectedFolderId(folderId)
               setActiveSection('筆記')
@@ -1534,8 +1836,8 @@ function App() {
         {activeSection === '筆記' ? (
           <NotesPage
             key={selectedFolderId}
-            folders={workspaceFolders}
-            notes={workspaceNotes}
+            folders={ownedWorkspaceFolders}
+            notes={ownedWorkspaceNotes}
             selectedFolderId={selectedFolderId}
             onAddNote={handleCreateNote}
             onAttachFile={handleAttachFile}
@@ -1544,7 +1846,9 @@ function App() {
             onOpenLightbox={setLightboxUrl}
             onReorderAttachments={handleReorderAttachments}
             onRenameAttachment={handleRenameAttachment}
+            onUpdateAttachmentVisibility={handleUpdateAttachmentVisibility}
             onUpdateNote={handleUpdateNote}
+            onUpdateNoteVisibility={handleUpdateNoteVisibility}
           />
         ) : null}
         {activeSection === '心得' ? (
@@ -1565,12 +1869,15 @@ function App() {
             activeTab={chatActiveTab}
             setActiveTab={setChatActiveTab}
             currentUserName={authUser?.name || ''}
+            uploadSharedFile={uploadSharedFileForAcceptedFriends}
           />
         ) : null}
         {activeSection === '好友' ? (
           <FriendsPage
             friends={workspaceFriends}
+            folders={workspaceFolders}
             groups={workspaceGroups}
+            notes={workspaceNotes}
             setGroups={setWorkspaceGroups}
             onCreateGroup={handleCreateGroup}
             onDeleteGroup={handleDeleteGroup}
@@ -1589,6 +1896,7 @@ function App() {
           <AlbumPage
             onOpenLightbox={setLightboxUrl}
             albums={workspaceAlbums}
+            currentUserId={authUser?.id ?? ''}
             setAlbums={setWorkspaceAlbums}
             photos={workspacePhotos}
             friendPhotos={workspaceFriendPhotos}
@@ -1611,6 +1919,8 @@ function App() {
           <CalendarSurface
             events={workspaceEvents}
             tasks={nextTasks}
+            currentUserId={authUser?.id ?? ''}
+            friends={acceptedWorkspaceFriends}
             onToggleTask={handleToggleCalendarTask}
             onAddEvent={handleAddCalendarEvent}
             onUpdateEvent={handleUpdateCalendarEvent}
@@ -1656,16 +1966,8 @@ function App() {
           activeIndex={activeLightboxIndex}
           onIndexChange={setActiveLightboxIndex}
           onClose={() => setActiveLightboxItems(null)}
-          onToggleLike={(itemId, liked) => {
-            // Update active state
-            setActiveLightboxItems(prev =>
-              prev ? prev.map(item => item.id === itemId ? { ...item, isLiked: liked } : item) : null
-            )
-            // Sync with workspaceFriendPhotos
-            setWorkspaceFriendPhotos(prev =>
-              prev.map(p => p.id === itemId ? { ...p, isLiked: liked } : p)
-            )
-          }}
+          onToggleLike={handleToggleRetroPhotoLike}
+          onAddComment={handleAddRetroPhotoComment}
         />
       )}
 
@@ -1716,7 +2018,7 @@ function App() {
                   if (!file) return
                   try {
                     setIsSavingSettings(true)
-                    const uploadedUrl = await uploadUserFileForDisplay(file)
+                    const uploadedUrl = await getStoredFileUrl(file, [], 'avatars')
                     setUserAvatarUrl(uploadedUrl)
                     alert('頭像圖片上傳成功！')
                   } catch (err) {
@@ -1922,7 +2224,7 @@ function App() {
 
       {showAddAlbumModal && (
         <AddAlbumModal
-          photos={workspacePhotos}
+          photos={workspacePhotos.filter((photo) => !photo.ownerId || photo.ownerId === authUser?.id)}
           onClose={() => setShowAddAlbumModal(false)}
           onCreateAlbum={handleCreateAlbum}
         />
@@ -1930,10 +2232,11 @@ function App() {
 
       {showUploadPhotoModal && (
         <UploadPhotoModal
-          albums={workspaceAlbums}
+          albums={workspaceAlbums.filter((album) => !album.ownerId || album.ownerId === authUser?.id)}
           defaultAlbumId={typeof showUploadPhotoModal === 'string' ? showUploadPhotoModal : undefined}
           onClose={() => setShowUploadPhotoModal(false)}
           onUploadPhoto={handleUploadPhotoToAlbum}
+          uploadSharedFile={uploadSharedFileForAcceptedFriends}
         />
       )}
     </main>
@@ -2348,10 +2651,12 @@ function FoldersPage({
   folders,
   onAddFolder,
   onOpenFolderNotes,
+  onUpdateFolderVisibility,
 }: {
   folders: FolderModel[]
   onAddFolder: (folderName?: string) => FolderModel
   onOpenFolderNotes: (folderId: string) => void
+  onUpdateFolderVisibility: (folderId: string, visibility: ShareVisibility) => void
 }) {
   const [searchQuery, setSearchQuery] = useState('')
   const [isNamingFolder, setIsNamingFolder] = useState(false)
@@ -2460,6 +2765,19 @@ function FoldersPage({
                       <strong>{folder.name}</strong>
                       <p>{folder.count} 則筆記 · 剛剛編輯</p>
                     </div>
+                    <button
+                      className="folder-share-chip"
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onUpdateFolderVisibility(
+                          folder.id,
+                          folder.visibility === 'shared' ? 'private' : 'shared',
+                        )
+                      }}
+                    >
+                      {folder.visibility === 'shared' ? '好友可看' : '私人'}
+                    </button>
                     <ChevronRight aria-hidden="true" size={16} />
                   </div>
                 ))
@@ -2585,19 +2903,23 @@ function NotesPage({
   onOpenLightbox,
   onReorderAttachments,
   onRenameAttachment,
+  onUpdateAttachmentVisibility,
   onUpdateNote,
+  onUpdateNoteVisibility,
 }: {
   folders: FolderModel[]
   notes: WorkspaceNote[]
   selectedFolderId: string
   onAddNote: (folderName: string) => WorkspaceNote
-  onAttachFile: (noteId: string, file: File, kind: 'photo' | 'pdf') => Promise<AttachFileResult>
+  onAttachFile: (noteId: string, file: File, kind: 'photo' | 'pdf', visibility?: ShareVisibility) => Promise<AttachFileResult>
   onDeleteAttachment: (noteId: string, attachmentId: string) => void
   onDeleteNote: (noteId: string) => void
   onOpenLightbox: (url: string) => void
   onReorderAttachments: (noteId: string, reorderedAttachments: NoteAttachment[]) => void
   onRenameAttachment: (noteId: string, attachmentId: string, newName: string) => void
-  onUpdateNote: (noteId: string, patch: Partial<Pick<WorkspaceNote, 'title' | 'excerpt' | 'date'>>) => void
+  onUpdateAttachmentVisibility: (noteId: string, attachmentId: string, visibility: ShareVisibility) => void
+  onUpdateNote: (noteId: string, patch: Partial<Pick<WorkspaceNote, 'title' | 'excerpt' | 'date' | 'visibility' | 'visibleToUserIds'>>) => void
+  onUpdateNoteVisibility: (noteId: string, visibility: ShareVisibility) => void
 }) {
   const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) ?? folders[0]
   const folderNotes = notes.filter((note) => note.folder === selectedFolder.name)
@@ -2609,6 +2931,7 @@ function NotesPage({
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const [dragKind, setDragKind] = useState<'photo' | 'pdf' | null>(null)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
+  const [attachmentVisibility, setAttachmentVisibility] = useState<ShareVisibility>('private')
   const photoInputRef = useRef<HTMLInputElement>(null)
   const pdfInputRef = useRef<HTMLInputElement>(null)
 
@@ -2651,6 +2974,7 @@ function NotesPage({
     title: attachment.name,
     originalTitle: attachment.originalName ?? attachment.name,
     imageUrl: attachment.url || featuredNote.imageUrl,
+    visibility: attachment.visibility,
   }))
   const pdfItems = uploadedPdfs
 
@@ -2682,7 +3006,7 @@ function NotesPage({
     }
 
     setUploadMessage('上傳中...')
-    const result = await onAttachFile(featuredNote.id, file, kind)
+    const result = await onAttachFile(featuredNote.id, file, kind, attachmentVisibility)
     if (!result.ok) {
       setUploadMessage(result.message)
       return
@@ -2889,6 +3213,45 @@ function NotesPage({
             </div>
           </div>
 
+          <div className="sharing-control-row" aria-label="筆記與附件公開設定">
+            <div className="sharing-control-group">
+              <span>筆記可見性</span>
+              <button
+                className={featuredNote.visibility !== 'shared' ? 'active' : ''}
+                disabled={!hasFolderNotes}
+                type="button"
+                onClick={() => onUpdateNoteVisibility(featuredNote.id, 'private')}
+              >
+                私人筆記
+              </button>
+              <button
+                className={featuredNote.visibility === 'shared' ? 'active' : ''}
+                disabled={!hasFolderNotes}
+                type="button"
+                onClick={() => onUpdateNoteVisibility(featuredNote.id, 'shared')}
+              >
+                給好友看
+              </button>
+            </div>
+            <div className="sharing-control-group">
+              <span>新附件</span>
+              <button
+                className={attachmentVisibility === 'private' ? 'active' : ''}
+                type="button"
+                onClick={() => setAttachmentVisibility('private')}
+              >
+                附件私人
+              </button>
+              <button
+                className={attachmentVisibility === 'shared' ? 'active' : ''}
+                type="button"
+                onClick={() => setAttachmentVisibility('shared')}
+              >
+                附件給好友看
+              </button>
+            </div>
+          </div>
+
           <input
             ref={photoInputRef}
             aria-label="選擇照片檔案"
@@ -2975,6 +3338,21 @@ function NotesPage({
                           onChange={(event) => onRenameAttachment(featuredNote.id, photo.id, event.target.value)}
                         />
                       </div>
+                      <button
+                        className="attachment-visibility-chip"
+                        disabled={!hasFolderNotes}
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onUpdateAttachmentVisibility(
+                            featuredNote.id,
+                            photo.id,
+                            photo.visibility === 'shared' ? 'private' : 'shared',
+                          )
+                        }}
+                      >
+                        {photo.visibility === 'shared' ? '好友可看' : '私人'}
+                      </button>
                     </figcaption>
                   </figure>
                 ))}
@@ -3011,6 +3389,20 @@ function NotesPage({
                         />
                       </div>
                       <span>{pdf.sizeLabel}</span>
+                      <button
+                        className="attachment-visibility-chip"
+                        disabled={!hasFolderNotes}
+                        type="button"
+                        onClick={() =>
+                          onUpdateAttachmentVisibility(
+                            featuredNote.id,
+                            pdf.id,
+                            pdf.visibility === 'shared' ? 'private' : 'shared',
+                          )
+                        }
+                      >
+                        {pdf.visibility === 'shared' ? '好友可看' : '私人'}
+                      </button>
                     </div>
                     <div className="pdf-card-actions">
                       <button
@@ -3243,7 +3635,7 @@ function ReflectionsPage({ onOpenLightbox }: { onOpenLightbox: (url: string) => 
     }
 
     setReflectionUploadMessage('上傳中...')
-    const imageUrl = await getStoredFileUrl(file)
+    const imageUrl = await getStoredFileUrl(file, [], 'journals')
     const uploadedPhoto = {
       id: `reflection-photo-${Date.now()}-${file.name}`,
       title: file.name,
@@ -3575,6 +3967,7 @@ function ChatPage({
   activeTab: activeRightTab,
   setActiveTab: setActiveRightTab,
   currentUserName,
+  uploadSharedFile,
 }: {
   onOpenLightbox: (url: string) => void
   chatThreads: ChatThread[]
@@ -3589,6 +3982,7 @@ function ChatPage({
   activeTab: string
   setActiveTab: (tab: string) => void
   currentUserName: string
+  uploadSharedFile: (file: File, category?: string) => Promise<string>
 }) {
   const buildCommentPlaceholders = (count: number): ChatComment[] =>
     Array.from({ length: count }, (_, index) => ({
@@ -3751,7 +4145,7 @@ function ChatPage({
 
   const uploadDraftPhotos = async (files: FileList | null) => {
     if (!files?.length) return
-    const uploadedUrls = await Promise.all(Array.from(files).map((file) => getStoredFileUrl(file)))
+    const uploadedUrls = await Promise.all(Array.from(files).map((file) => uploadSharedFile(file, 'chat')))
     setDraft((currentDraft) => ({
       ...currentDraft,
       images: [...currentDraft.images, ...uploadedUrls],
@@ -4216,7 +4610,9 @@ function ChatPage({
 
 interface FriendsPageProps {
   friends: Friend[]
+  folders: FolderModel[]
   groups: FriendGroup[]
+  notes: WorkspaceNote[]
   setGroups: React.Dispatch<React.SetStateAction<FriendGroup[]>>
   onCreateGroup: (name: string) => string
   onDeleteGroup: (groupId: string) => void
@@ -4233,7 +4629,9 @@ interface FriendsPageProps {
 
 function FriendsPage({
   friends,
+  folders,
   groups,
+  notes,
   setGroups,
   onCreateGroup,
   onDeleteGroup,
@@ -4314,7 +4712,7 @@ function FriendsPage({
   const [editingGroupName, setEditingGroupName] = useState('')
 
   const acceptedFriends = useMemo(() => {
-    return friends.filter(f => f.friendshipStatus === 'accepted' || !f.friendshipStatus)
+    return getAcceptedFriends(friends)
   }, [friends])
 
   // Filtered and sorted friends list: Starred置頂
@@ -4377,6 +4775,29 @@ function FriendsPage({
     ? undefined
     : (filteredFriends.find((f) => f.id === selectedFriendId) ?? filteredFriends[0])
   const activeGroup = groups.find((g) => g.id === selectedGroupId)
+  const sharedFriendNotes = activeFriend
+    ? notes.filter((note) => note.ownerId === activeFriend.id && note.visibility === 'shared')
+    : []
+  const sharedFriendFolderEntries = activeFriend
+    ? [
+        ...folders
+          .filter((folder) => folder.ownerId === activeFriend.id && folder.visibility === 'shared')
+          .map((folder) => ({
+            id: folder.id,
+            name: folder.name,
+            count: sharedFriendNotes.filter(
+              (note) => note.folderId === folder.id || note.folder === folder.name,
+            ).length,
+          })),
+        ...sharedFriendNotes
+          .filter((note) => !folders.some((folder) => folder.id === note.folderId))
+          .map((note) => ({
+            id: note.folderId ?? `${activeFriend.id}-${note.folder}`,
+            name: note.folder,
+            count: sharedFriendNotes.filter((item) => item.folder === note.folder).length,
+          })),
+      ].filter((folder, index, list) => list.findIndex((item) => item.id === folder.id) === index)
+    : []
 
   const getFriendGroups = (friendId: string) => {
     return groups.filter((g) => g.memberIds.includes(friendId))
@@ -5094,6 +5515,47 @@ function FriendsPage({
                         )}
                       </div>
 
+                      <div className="friend-shared-folders-panel">
+                        <div className="friend-shared-header">
+                          <strong>好友資料夾</strong>
+                          <span>{sharedFriendFolderEntries.length} 本資料夾</span>
+                        </div>
+                        {sharedFriendFolderEntries.length > 0 ? (
+                          <div className="friend-shared-folder-list">
+                            {sharedFriendFolderEntries.map((folder) => {
+                              const folderNotes = sharedFriendNotes.filter(
+                                (note) => note.folderId === folder.id || note.folder === folder.name,
+                              )
+                              return (
+                                <article className="friend-shared-folder-card" key={folder.id}>
+                                  <div>
+                                    <strong>{folder.name}</strong>
+                                    <span>{folder.count} 則共享筆記</span>
+                                  </div>
+                                  <ul>
+                                    {folderNotes.map((note) => (
+                                      <li key={note.id}>
+                                        <span>{note.title}</span>
+                                        <small>
+                                          {(note.attachments ?? []).filter(
+                                            (attachment) => attachment.visibility === 'shared',
+                                          ).length}{' '}
+                                          個好友附件
+                                        </small>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </article>
+                              )
+                            })}
+                          </div>
+                        ) : (
+                          <p className="friend-shared-empty">
+                            目前沒有這位好友分享給你的資料夾或筆記。
+                          </p>
+                        )}
+                      </div>
+
                       <div className="profile-groups-editor-box">
                         <strong>所屬群組</strong>
                         {isEditingGroups ? (
@@ -5242,6 +5704,7 @@ function FriendsPage({
 
 function AlbumPage({
   albums,
+  currentUserId,
   photos,
   friendPhotos,
   setFriendPhotos,
@@ -5256,6 +5719,7 @@ function AlbumPage({
 }: {
   onOpenLightbox: (url: string) => void
   albums: Album[]
+  currentUserId: string
   setAlbums: React.Dispatch<React.SetStateAction<Album[]>>
   photos: Photo[]
   friendPhotos: FriendPhoto[]
@@ -5284,7 +5748,9 @@ function AlbumPage({
       location: p.location,
       dateStr: p.date,
       title: p.title,
-      isLiked: !!p.isLiked,
+      isLiked: currentUserId ? p.likedByUserIds?.includes(currentUserId) ?? !!p.isLiked : !!p.isLiked,
+      likedByUserIds: p.likedByUserIds,
+      comments: p.comments ?? [],
       isFriendPhoto: true
     }))
     onOpenRetroLightbox(lightboxItems, activeIndex)
@@ -5301,7 +5767,9 @@ function AlbumPage({
       location: p.location || '雲林縣',
       dateStr: p.dayOfWeek || '週一',
       title: p.title,
-      isLiked: !!p.isStarred,
+      isLiked: currentUserId ? isPhotoLikedBy(p, currentUserId) : !!p.isStarred,
+      likedByUserIds: p.likedByUserIds,
+      comments: p.comments ?? [],
       isFriendPhoto: false
     }))
     const clickedIdx = weekPhotos.findIndex(p => p.id === targetPhotoId)
@@ -5344,6 +5812,20 @@ function AlbumPage({
 
             {/* Friends Photos Feed */}
             <div className="friend-photos-feed-scroll">
+              {sortedWeeks.length > 0 && (
+                <div className="album-index-list" aria-label="相簿目錄">
+                  {sortedWeeks.map((album) => {
+                    const isOwnAlbum = !album.ownerId || album.ownerId === currentUserId
+                    return (
+                      <div key={album.id} className="album-index-card">
+                        <strong>{album.title}</strong>
+                        <span>{isOwnAlbum ? '我的相簿' : `${album.ownerName || '好友'}分享`}</span>
+                        <small>{album.photoIds.length} 張照片</small>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
               {friendPhotos.map((fp, idx) => (
                 <div key={fp.id} className="friend-post-card">
                   {/* Post Header */}
@@ -5390,8 +5872,8 @@ function AlbumPage({
               ))}
 
               {friendPhotos.length === 0 && (
-                <div style={{ padding: '40px 10px', textAlign: 'center', color: '#a39480' }}>
-                  <p>暫無好友分享相片。</p>
+                <div style={{ padding: '24px 10px', textAlign: 'center', color: '#a39480' }}>
+                  <p>這裡會整理好友分享的照片流；目前先顯示上方相簿目錄。</p>
                 </div>
               )}
             </div>
@@ -5411,6 +5893,7 @@ function AlbumPage({
               </div>
             ) : null}
             {sortedWeeks.map((week) => {
+              const isOwnAlbum = !week.ownerId || week.ownerId === currentUserId
               // Filter photos in this week
               const weekPhotos = week.photoIds
                 .map((pid) => photos.find((p) => p.id === pid))
@@ -5441,7 +5924,7 @@ function AlbumPage({
                       </button>
                       <button
                         type="button"
-                        className="weekly-group-delete-btn"
+                        className={`weekly-group-delete-btn ${isOwnAlbum ? '' : 'hidden-owner-control'}`}
                         onClick={() => {
                           if (window.confirm(`確定要刪除《${week.title}》的所有記錄與相片嗎？`)) {
                             onDeleteAlbum(week.id)
@@ -5461,7 +5944,7 @@ function AlbumPage({
                         {/* Hover delete & star */}
                         <button
                           type="button"
-                          className="weekly-card-action-btn delete-btn"
+                          className={`weekly-card-action-btn delete-btn ${isOwnAlbum ? '' : 'hidden-owner-control'}`}
                           onClick={() => onDeletePhotoFromAlbum(week.id, photo.id)}
                           title="撕下此相片"
                         >
@@ -5470,7 +5953,7 @@ function AlbumPage({
                         
                         <button
                           type="button"
-                          className={`weekly-card-action-btn star-btn ${photo.isStarred ? 'starred' : ''}`}
+                          className={`weekly-card-action-btn star-btn ${photo.isStarred ? 'starred' : ''} ${isOwnAlbum ? '' : 'hidden-owner-control'}`}
                           onClick={() => onToggleStarPhoto(photo.id)}
                           title={photo.isStarred ? '取消星標' : '加入重點回顧'}
                         >
@@ -5494,7 +5977,10 @@ function AlbumPage({
                           <input
                             type="text"
                             value={photo.title}
-                            onChange={(e) => onUpdatePhotoTitle(photo.id, e.target.value)}
+                            onChange={(e) => {
+                              if (isOwnAlbum) onUpdatePhotoTitle(photo.id, e.target.value)
+                            }}
+                            readOnly={!isOwnAlbum}
                             className="weekly-card-caption-input"
                             title="點擊編輯相片記述"
                           />
@@ -5506,7 +5992,7 @@ function AlbumPage({
                     {!showHighlightsOnly && (
                       <button
                         type="button"
-                        className="weekly-photo-add-card"
+                        className={`weekly-photo-add-card ${isOwnAlbum ? '' : 'hidden-owner-control'}`}
                         onClick={() => onUploadPhotoClick(week.id)}
                         aria-label={`新增照片到${week.title}`}
                         title="新增照片至此週"
@@ -5557,6 +6043,8 @@ function AlbumPage({
 function CalendarSurface({
   events,
   tasks,
+  currentUserId,
+  friends,
   onToggleTask,
   onAddEvent,
   onUpdateEvent,
@@ -5566,6 +6054,8 @@ function CalendarSurface({
 }: {
   events: CalendarEvent[]
   tasks: Array<CalendarTask & { completed: boolean }>
+  currentUserId: string
+  friends: Friend[]
   onToggleTask: (id: string) => void
   onAddEvent: (event: CalendarEvent) => void
   onUpdateEvent: (event: CalendarEvent) => void
@@ -5605,6 +6095,7 @@ function CalendarSurface({
   const [newEventStart, setNewEventStart] = useState('10:00')
   const [newEventEnd, setNewEventEnd] = useState('11:30')
   const [newVisibility, setNewVisibility] = useState<'private' | 'shared'>('private')
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>([])
   const [newEventColor, setNewEventColor] = useState<'sage' | 'rose' | 'blue' | 'yellow'>('sage')
   const [editingEventId, setEditingEventId] = useState<string | null>(null)
   const [reminderStatuses, setReminderStatuses] = useState<Record<string, 'off' | 'queued' | 'provider_not_configured'>>({})
@@ -5612,6 +6103,7 @@ function CalendarSurface({
     'invite-reading': 'pending',
     'invite-hiking': 'pending',
   })
+  const visibleEventInvites: CalendarInvitePreview[] = eventInvites.filter(() => false)
 
   // State for Add Daily Task Form
   const [isAddingDailyTask, setIsAddingDailyTask] = useState(false)
@@ -5623,6 +6115,9 @@ function CalendarSurface({
   const dayOfWeekIndex = (1 + (selectedDay - 1)) % 7
   const dayOfWeekStr = weekDays[dayOfWeekIndex]
   const selectedDateStr = `2026-06-${selectedDay.toString().padStart(2, '0')}`
+  const sharedParticipantIds = selectedParticipantIds.filter((friendId) =>
+    friends.some((friend) => friend.id === friendId),
+  )
 
   // Filter events and tasks for the selected date
   const dayEvents = events.filter((e) => e.startsAt.startsWith(selectedDateStr))
@@ -5674,6 +6169,7 @@ function CalendarSurface({
     setNewEventStart('10:00')
     setNewEventEnd('11:30')
     setNewVisibility('private')
+    setSelectedParticipantIds([])
     setNewEventColor('sage')
     setEditingEventId(null)
   }
@@ -5697,6 +6193,7 @@ function CalendarSurface({
     setNewEventStart(event.startsAt.split('T')[1]?.substring(0, 5) ?? '10:00')
     setNewEventEnd(event.endsAt.split('T')[1]?.substring(0, 5) ?? '11:30')
     setNewVisibility(event.visibility)
+    setSelectedParticipantIds(event.participantIds)
     setNewEventColor((event.color as 'sage' | 'rose' | 'blue' | 'yellow') ?? 'sage')
     setShowAddEventModal(true)
   }
@@ -5713,6 +6210,14 @@ function CalendarSurface({
       ...current,
       [inviteId]: status,
     }))
+  }
+
+  const toggleSelectedParticipant = (friendId: string) => {
+    setSelectedParticipantIds((current) =>
+      current.includes(friendId)
+        ? current.filter((id) => id !== friendId)
+        : [...current, friendId],
+    )
   }
 
   const handleCreateEvent = (e: React.FormEvent) => {
@@ -5732,7 +6237,7 @@ function CalendarSurface({
           startsAt,
           endsAt,
           visibility: newVisibility,
-          participantIds: newVisibility === 'shared' ? originalEvent.participantIds.length > 0 ? originalEvent.participantIds : ['user-2'] : [],
+          participantIds: newVisibility === 'shared' ? sharedParticipantIds : [],
           color: newEventColor,
         })
       }
@@ -5742,13 +6247,13 @@ function CalendarSurface({
 
     const newEv: CalendarEvent = {
       id: `event-user-${Date.now()}`,
-      ownerId: 'user-1',
+      ownerId: currentUserId,
       title: newEventTitle.trim(),
       description: newEventDesc.trim(),
       startsAt,
       endsAt,
       visibility: newVisibility,
-      participantIds: newVisibility === 'shared' ? ['user-2'] : [],
+      participantIds: newVisibility === 'shared' ? sharedParticipantIds : [],
       color: newEventColor
     }
 
@@ -5762,7 +6267,7 @@ function CalendarSurface({
 
     const newTaskVal: CalendarTask = {
       id: `task-user-${Date.now()}`,
-      ownerId: 'user-1',
+      ownerId: currentUserId,
       title: newDailyTaskTitle.trim(),
       dueAt: `2026-06-${selectedDay.toString().padStart(2, '0')}T18:00:00.000Z`,
       priority: newDailyTaskPriority,
@@ -5995,7 +6500,7 @@ function CalendarSurface({
                   <span>好友事件回覆</span>
                 </div>
                 <div className="invite-list">
-                  {eventInvites.map((invite) => {
+                  {visibleEventInvites.map((invite) => {
                     const status = eventInviteStatuses[invite.id]
                     const statusLabel = status === 'accepted' ? '已接受' : status === 'declined' ? '已拒絕' : '待回覆'
 
@@ -6024,6 +6529,9 @@ function CalendarSurface({
                       </div>
                     )
                   })}
+                  {visibleEventInvites.length === 0 && (
+                    <div className="calendar-empty-note">目前沒有共同日曆邀請。</div>
+                  )}
                 </div>
               </article>
 
@@ -6354,7 +6862,10 @@ function CalendarSurface({
                       type="radio"
                       name="visibility"
                       checked={newVisibility === 'private'}
-                      onChange={() => setNewVisibility('private')}
+                      onChange={() => {
+                        setNewVisibility('private')
+                        setSelectedParticipantIds([])
+                      }}
                     />
                     🔒 私人事件
                   </label>
@@ -6369,6 +6880,26 @@ function CalendarSurface({
                   </label>
                 </div>
               </div>
+
+              {newVisibility === 'shared' && (
+                <div className="calendar-friend-picker" aria-label="選擇共同日曆好友">
+                  {friends.length === 0 ? (
+                    <p>目前沒有 accepted 好友，先到好友頁加入好友後再建立共同日曆。</p>
+                  ) : (
+                    friends.map((friend) => (
+                      <label key={friend.id} className="calendar-friend-option">
+                        <input
+                          type="checkbox"
+                          checked={selectedParticipantIds.includes(friend.id)}
+                          onChange={() => toggleSelectedParticipant(friend.id)}
+                        />
+                        <img src={friend.avatarUrl} alt="" />
+                        <span>{friend.name}</span>
+                      </label>
+                    ))
+                  )}
+                </div>
+              )}
 
               <div className="form-group">
                 <label>主題標籤顏色</label>
@@ -6861,6 +7392,7 @@ function UploadPhotoModal({
   defaultAlbumId,
   onClose,
   onUploadPhoto,
+  uploadSharedFile,
 }: {
   albums: Album[]
   defaultAlbumId?: string
@@ -6873,6 +7405,7 @@ function UploadPhotoModal({
     dayOfWeek?: string,
     location?: string
   ) => void
+  uploadSharedFile: (file: File, category?: string) => Promise<string>
 }) {
   const [selectedAlbumId, setSelectedAlbumId] = useState(defaultAlbumId ?? '')
   const [photoTitle, setPhotoTitle] = useState('')
@@ -6899,7 +7432,7 @@ function UploadPhotoModal({
   const handleMockUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return
     const file = files[0]
-    setPhotoUrl(await getStoredFileUrl(file))
+    setPhotoUrl(await uploadSharedFile(file, 'albums'))
     if (!photoTitle) {
       setPhotoTitle(file.name.split('.')[0])
     }
@@ -7020,12 +7553,14 @@ function RetroLightboxModal({
   onIndexChange,
   onClose,
   onToggleLike,
+  onAddComment,
 }: {
   items: RetroLightboxItem[]
   activeIndex: number
   onClose: () => void
   onIndexChange: (idx: number) => void
-  onToggleLike: (itemId: string, liked: boolean) => void
+  onToggleLike: (itemId: string) => void
+  onAddComment: (itemId: string, text: string) => void
 }) {
   const [commentText, setCommentText] = useState('')
   
@@ -7099,14 +7634,15 @@ function RetroLightboxModal({
 
   if (!currentItem) return null
 
-  const currentComments = photoComments[currentItem.id] || []
+  const currentComments = photoComments[currentItem.id] || currentItem.comments || []
 
   const handleSendComment = (e: React.FormEvent) => {
     e.preventDefault()
     if (!commentText.trim()) return
+    onAddComment(currentItem.id, commentText.trim())
 
     const newComment = {
-      id: `c-user-${Date.now()}`,
+      id: createClientId('lightbox-comment'),
       author: '我',
       avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=120&q=80',
       timeLabel: '剛剛',
@@ -7190,7 +7726,7 @@ function RetroLightboxModal({
               <button
                 type="button"
                 className={`retro-lightbox-like-btn ${currentItem.isLiked ? 'liked' : ''}`}
-                onClick={() => onToggleLike(currentItem.id, !currentItem.isLiked)}
+                onClick={() => onToggleLike(currentItem.id)}
                 style={{ padding: 0 }}
               >
                 {currentItem.isLiked ? '❤️' : '🤍'}

@@ -1,7 +1,9 @@
 import 'dotenv/config'
 import cors from 'cors'
 import express, { type ErrorRequestHandler } from 'express'
+import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
+import path from 'node:path'
 import { Server } from 'socket.io'
 import { apiRouter } from './api.js'
 import { getCurrentUserFromRequest } from './auth.js'
@@ -21,6 +23,14 @@ app.use(cors({
 }))
 app.use(express.json({ limit: '10mb' }))
 app.use('/api', apiRouter)
+
+const clientDistPath = path.resolve(process.cwd(), 'dist')
+if (process.env.NODE_ENV === 'production' && existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath))
+  app.get(/^(?!\/api)(?!\/socket\.io).*/, (_req, res) => {
+    res.sendFile(path.join(clientDistPath, 'index.html'))
+  })
+}
 
 const errorHandler: ErrorRequestHandler = (error, _req, res, next) => {
   void next

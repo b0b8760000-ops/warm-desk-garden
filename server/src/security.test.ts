@@ -6,6 +6,7 @@ import {
   sanitizeCalendarEventPatch,
   sanitizeCalendarTaskCreate,
   sanitizeCalendarTaskPatch,
+  sanitizeFriendshipPatch,
   sanitizeWorkspacePatch,
 } from './security'
 
@@ -21,6 +22,81 @@ describe('backend security helpers', () => {
         id: 'client-id',
       }),
     ).toEqual({ title: 'Updated title' })
+  })
+
+  it('allows file metadata fields without allowing ownership changes', () => {
+    expect(
+      sanitizeWorkspacePatch(collections.noteAttachments, {
+        noteId: 'note-1',
+        fileId: 'file-1',
+        bucketId: 'warm-desk-garden-files',
+        storagePath: 'notes/user-1/file-1/note.png',
+        category: 'notes',
+        url: 'https://files.example.com/note.png',
+        ownerId: 'attacker',
+      }),
+    ).toEqual({
+      noteId: 'note-1',
+      fileId: 'file-1',
+      bucketId: 'warm-desk-garden-files',
+      storagePath: 'notes/user-1/file-1/note.png',
+      category: 'notes',
+      url: 'https://files.example.com/note.png',
+    })
+  })
+
+  it('allows shared visibility on folders, notes, and note attachments only for accepted friends', () => {
+    expect(
+      sanitizeWorkspacePatch(
+        collections.folders,
+        {
+          name: 'Shared shelf',
+          visibility: 'shared',
+          visibleToUserIds: ['friend-1', 'stranger', 'friend-1'],
+        },
+        ['friend-1'],
+      ),
+    ).toEqual({
+      name: 'Shared shelf',
+      visibility: 'shared',
+      visibleToUserIds: ['friend-1'],
+    })
+
+    expect(
+      sanitizeWorkspacePatch(
+        collections.notes,
+        {
+          folderId: 'folder-1',
+          title: 'Shared note',
+          visibility: 'shared',
+          visibleToUserIds: ['friend-1'],
+        },
+        ['friend-1'],
+      ),
+    ).toEqual({
+      folderId: 'folder-1',
+      title: 'Shared note',
+      visibility: 'shared',
+      visibleToUserIds: ['friend-1'],
+    })
+
+    expect(
+      sanitizeWorkspacePatch(
+        collections.noteAttachments,
+        {
+          noteId: 'note-1',
+          name: 'photo.png',
+          visibility: 'private',
+          visibleToUserIds: ['friend-1'],
+        },
+        ['friend-1'],
+      ),
+    ).toEqual({
+      noteId: 'note-1',
+      name: 'photo.png',
+      visibility: 'private',
+      visibleToUserIds: [],
+    })
   })
 
   it('does not trust client-provided participants when creating shared calendar events', () => {
@@ -88,6 +164,41 @@ describe('backend security helpers', () => {
         createdAt: '2020-01-01T00:00:00.000Z',
       }),
     ).toEqual({ title: 'Updated event' })
+  })
+
+  it('lets event owners update only accepted friend participants', () => {
+    expect(
+      sanitizeCalendarEventPatch(
+        {
+          title: 'Updated shared event',
+          participantIds: ['friend-1', 'friend-1', 'stranger'],
+        },
+        ['friend-1'],
+      ),
+    ).toEqual({
+      title: 'Updated shared event',
+      participantIds: ['friend-1'],
+    })
+  })
+
+  it('only lets the addressee accept a friendship invite', () => {
+    const friendship = {
+      requesterId: 'sender-1',
+      addresseeId: 'receiver-1',
+      friendshipStatus: 'pending',
+    }
+
+    expect(
+      sanitizeFriendshipPatch(
+        { friendshipStatus: 'accepted', requesterId: 'attacker' },
+        friendship,
+        'receiver-1',
+      ),
+    ).toEqual({ friendshipStatus: 'accepted' })
+
+    expect(
+      sanitizeFriendshipPatch({ friendshipStatus: 'accepted' }, friendship, 'sender-1'),
+    ).toEqual({})
   })
 
   it('allows friendship status transitions without exposing relationship ownership', () => {

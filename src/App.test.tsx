@@ -8,11 +8,15 @@ type MockApiPayload = Record<string, unknown> | undefined
 const apiMocks = vi.hoisted(() => {
   return {
     callApi: vi.fn(),
+    uploadFile: vi.fn(),
+    uploadFileForDisplay: vi.fn(),
   }
 })
 
 vi.mock('./services/apiClient', () => ({
   callApi: apiMocks.callApi,
+  uploadFile: apiMocks.uploadFile,
+  uploadFileForDisplay: apiMocks.uploadFileForDisplay,
   isApiConfigured: true,
 }))
 
@@ -25,7 +29,6 @@ const authMocks = vi.hoisted(() => {
     signInWithEmail: vi.fn(),
     registerWithEmail: vi.fn(),
     signOut: vi.fn(),
-    uploadUserFileForDisplay: vi.fn(),
   }
 })
 
@@ -35,7 +38,6 @@ vi.mock('./services/appwriteClient', () => ({
   signInWithEmail: authMocks.signInWithEmail,
   registerWithEmail: authMocks.registerWithEmail,
   signOut: authMocks.signOut,
-  uploadUserFileForDisplay: authMocks.uploadUserFileForDisplay,
 }))
 
 beforeEach(() => {
@@ -43,14 +45,16 @@ beforeEach(() => {
   authMocks.signInWithEmail.mockReset()
   authMocks.registerWithEmail.mockReset()
   authMocks.signOut.mockReset()
-  authMocks.uploadUserFileForDisplay.mockReset()
   apiMocks.callApi.mockReset()
+  apiMocks.uploadFile.mockReset()
+  apiMocks.uploadFileForDisplay.mockReset()
 
   authMocks.getCurrentUser.mockResolvedValue(authMocks.defaultUser)
   authMocks.signInWithEmail.mockResolvedValue(authMocks.defaultUser)
   authMocks.registerWithEmail.mockResolvedValue(authMocks.defaultUser)
   authMocks.signOut.mockResolvedValue(undefined)
-  authMocks.uploadUserFileForDisplay.mockRejectedValue(new Error('Storage unavailable in tests.'))
+  apiMocks.uploadFile.mockRejectedValue(new Error('Storage unavailable in tests.'))
+  apiMocks.uploadFileForDisplay.mockRejectedValue(new Error('Storage unavailable in tests.'))
 
   apiMocks.callApi.mockImplementation(() => {
     return Promise.resolve(null)
@@ -227,6 +231,39 @@ describe('Warm Desk Garden app shell', () => {
 
     expect(authMocks.signOut).toHaveBeenCalledTimes(1)
     expect(await screen.findByRole('heading', { name: '登入我的資料花園' })).toBeInTheDocument()
+  })
+
+  it('opens the workspace after sign-in without waiting for profile sync', async () => {
+    const user = userEvent.setup()
+    let resolveProfileSync: (value: unknown) => void = () => {}
+    const profileSync = new Promise((resolve) => {
+      resolveProfileSync = resolve
+    })
+
+    authMocks.getCurrentUser.mockRejectedValueOnce(new Error('No active session'))
+    authMocks.signInWithEmail.mockResolvedValueOnce({
+      id: 'user-3',
+      email: 'garden@example.com',
+      name: '學良',
+    })
+    apiMocks.callApi.mockImplementation((method: string, path: string) => {
+      if (method === 'POST' && path === '/profiles') {
+        return profileSync
+      }
+      if (method === 'GET') {
+        return Promise.resolve([])
+      }
+      return Promise.resolve(null)
+    })
+
+    render(<App />)
+
+    await user.type(await screen.findByLabelText('Email'), 'garden@example.com')
+    await user.type(screen.getByLabelText('密碼'), 'password123')
+    await user.click(screen.getByRole('button', { name: '登入並同步資料' }))
+
+    expect(await screen.findByRole('button', { name: '資料夾' })).toBeInTheDocument()
+    resolveProfileSync(null)
   })
 
   it('uses the approved Chinese navigation and avoids Thread or Retro labels', async () => {
@@ -1057,6 +1094,54 @@ describe('Warm Desk Garden app shell', () => {
         '/chat-posts',
         expect.objectContaining({
           text: '給真正好友看的近況',
+          visibleToUserIds: ['accepted-friend'],
+        }),
+      )
+    })
+  })
+
+  it('uploads chat photos with accepted friend read access before sharing the post', async () => {
+    const user = userEvent.setup()
+    apiMocks.uploadFileForDisplay.mockResolvedValueOnce('https://files.example.com/shared-chat-photo.png')
+    mockWorkspaceSnapshot({
+      friends: [
+        {
+          id: 'friendship-accepted',
+          requesterId: 'user-1',
+          requesterName: '學良',
+          requesterEmail: 'garden@example.com',
+          addresseeId: 'accepted-friend',
+          addresseeName: '已接受好友',
+          addresseeEmail: 'accepted@example.com',
+          addresseeStatus: '可以看到貼文',
+          addresseeTone: 'green',
+          friendshipStatus: 'accepted',
+        },
+      ],
+    })
+    await renderAuthenticatedApp()
+
+    await user.click(screen.getByRole('button', { name: '聊天' }))
+    await user.click(screen.getByRole('button', { name: '發一則貼文' }))
+    await user.upload(
+      screen.getByLabelText('上傳貼文照片'),
+      new File(['photo'], '聊天照片.png', { type: 'image/png' }),
+    )
+    await screen.findByText('1 張照片待發布')
+    await user.type(screen.getByLabelText('貼文內容'), '好友應該看得到照片')
+    await user.click(screen.getByRole('button', { name: '儲存貼文' }))
+
+    expect(apiMocks.uploadFileForDisplay).toHaveBeenCalledWith(
+      expect.any(File),
+      ['accepted-friend'],
+      'chat',
+    )
+    await waitFor(() => {
+      expect(apiMocks.callApi).toHaveBeenCalledWith(
+        'POST',
+        '/chat-posts',
+        expect.objectContaining({
+          images: ['https://files.example.com/shared-chat-photo.png'],
           visibleToUserIds: ['accepted-friend'],
         }),
       )

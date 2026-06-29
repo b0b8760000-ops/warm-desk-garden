@@ -6,6 +6,26 @@ export type LinkedResource = {
   title: string
 }
 
+export type StoredFileCategory =
+  | 'avatars'
+  | 'backgrounds'
+  | 'notes'
+  | 'journals'
+  | 'chat'
+  | 'albums'
+  | 'pdfs'
+
+export type StoredFileMetadata = {
+  fileId?: string
+  bucketId?: string
+  storagePath?: string
+  category?: StoredFileCategory
+  url: string
+  mimeType?: string
+  size?: number
+  originalName?: string
+}
+
 export type CalendarEvent = {
   id: string
   ownerId: UserId
@@ -45,13 +65,18 @@ export type ReminderJob = {
 
 export type Folder = {
   id: string
+  ownerId?: UserId
   name: string
   count: number
   color: string
+  visibility?: 'private' | 'shared'
+  visibleToUserIds?: UserId[]
 }
 
 export type Note = {
   id: string
+  ownerId?: UserId
+  folderId?: string
   title: string
   excerpt: string
   folder: string
@@ -61,6 +86,18 @@ export type Note = {
   likeCount?: number
   fileCount?: number
   isStarred?: boolean
+  visibility?: 'private' | 'shared'
+  visibleToUserIds?: UserId[]
+}
+
+export type NoteAttachment = StoredFileMetadata & {
+  id: string
+  ownerId?: UserId
+  noteId?: string
+  name: string
+  kind: 'photo' | 'pdf'
+  visibility?: 'private' | 'shared'
+  visibleToUserIds?: UserId[]
 }
 
 export type ChatPost = {
@@ -94,6 +131,31 @@ export type Photo = {
   isStarred?: boolean
   dayOfWeek?: string
   location?: string
+  ownerId?: string
+  ownerName?: string
+  ownerAvatarUrl?: string
+  visibleToUserIds?: string[]
+  albumTitle?: string
+  weekNum?: number
+  likedByUserIds?: UserId[]
+  comments?: PhotoComment[]
+  fileId?: string
+  bucketId?: string
+  storagePath?: string
+  category?: StoredFileCategory
+  mimeType?: string
+  size?: number
+  originalName?: string
+}
+
+export type PhotoComment = {
+  id: string
+  authorId: UserId
+  author: string
+  avatarUrl: string
+  timeLabel: string
+  text: string
+  likedByUserIds?: UserId[]
 }
 
 export type Album = {
@@ -106,6 +168,10 @@ export type Album = {
   photoIds: string[]
   weekNum?: number
   location?: string
+  ownerId?: string
+  ownerName?: string
+  ownerAvatarUrl?: string
+  visibleToUserIds?: string[]
 }
 
 
@@ -121,6 +187,7 @@ export type ChatThreadMessage = {
   text: string
   time: string
   mine?: boolean
+  attachmentIds?: string[]
 }
 
 export type ChatThread = {
@@ -129,6 +196,7 @@ export type ChatThread = {
   type: 'direct' | 'group'
   avatarUrl?: string
   messages: ChatThreadMessage[]
+  memberIds?: UserId[]
 }
 
 export type FriendPhoto = {
@@ -142,4 +210,6 @@ export type FriendPhoto = {
   location: string
   badge?: string
   isLiked?: boolean
+  likedByUserIds?: UserId[]
+  comments?: PhotoComment[]
 }

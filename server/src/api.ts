@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import multer from 'multer'
 import { ObjectId } from 'mongodb'
 import { collections } from './collections.js'
 import { getDb } from './db.js'
@@ -15,20 +16,53 @@ import {
 } from './routes.js'
 import { requireUser, type AuthenticatedRequest } from './auth.js'
 import {
+  defaultVisibilityFields,
   sanitizeCalendarEventCreate,
   sanitizeCalendarEventPatch,
   sanitizeCalendarTaskCreate,
   sanitizeCalendarTaskPatch,
+  sanitizeFriendshipPatch,
   sanitizeWorkspacePatch,
 } from './security.js'
+import { buildFriendshipRequestDocument, type ProfileRecord } from './friendships.js'
+import {
+  filterAcceptedReadUserIds,
+  parseFileCategory,
+  parseReadUserIds,
+  uploadAppwriteFileForUser,
+} from './fileStorage.js'
 
 export const apiRouter = Router()
+const fileUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024,
+    files: 1,
+  },
+})
 
 apiRouter.use(requireUser)
 
 function pickNotificationPatch(body: ApiRecord) {
   const allowed = new Set(['readAt', 'status'])
   return Object.fromEntries(Object.entries(body).filter(([key]) => allowed.has(key)))
+}
+
+async function getAcceptedFriendIds(userId: string) {
+  const db = await getDb()
+  const friendships = await db
+    .collection<ApiRecord>(collections.friendships)
+    .find({
+      friendshipStatus: 'accepted',
+      $or: [{ requesterId: userId }, { addresseeId: userId }],
+    })
+    .toArray()
+
+  return friendships
+    .map((friendship) =>
+      friendship.requesterId === userId ? friendship.addresseeId : friendship.requesterId,
+    )
+    .filter((id): id is string => typeof id === 'string')
 }
 
 apiRouter.get('/health', (_req, res) => {
@@ -38,6 +72,34 @@ apiRouter.get('/health', (_req, res) => {
 apiRouter.get('/me', (req, res) => {
   const user = (req as unknown as AuthenticatedRequest).currentUser
   res.json({ id: user.id, email: user.email })
+})
+
+apiRouter.post('/files', fileUpload.single('file'), async (req, res, next) => {
+  try {
+    const user = (req as unknown as AuthenticatedRequest).currentUser
+    const file = req.file
+
+    if (!file) {
+      res.status(400).json({ error: 'File is required.' })
+      return
+    }
+
+    const requestedReadUserIds = parseReadUserIds(req.body.readUserIds)
+    const acceptedReadUserIds = filterAcceptedReadUserIds(
+      requestedReadUserIds,
+      await getAcceptedFriendIds(user.id),
+    )
+    const uploadedFile = await uploadAppwriteFileForUser({
+      ownerId: user.id,
+      readUserIds: acceptedReadUserIds,
+      category: parseFileCategory(req.body.category),
+      file,
+    })
+
+    res.status(201).json(uploadedFile)
+  } catch (error) {
+    next(error)
+  }
 })
 
 apiRouter.post('/profiles', async (req, res) => {
@@ -139,10 +201,34 @@ apiRouter.all('*path', async (req, res, next) => {
             res.status(200).json(normalizeDocument(existing))
             return
           }
+
+          const addresseeProfile = await db
+            .collection<ProfileRecord>(collections.profiles)
+            .findOne({ userId: req.body.addresseeId })
+          if (!addresseeProfile) {
+            res.status(404).json({ error: 'Friend profile was not found.' })
+            return
+          }
+
+          const requesterProfile = await db
+            .collection<ProfileRecord>(collections.profiles)
+            .findOne({ userId: user.id })
+          const document = buildFriendshipRequestDocument({
+            currentUser: user,
+            requesterProfile,
+            addresseeProfile,
+            now,
+          })
+          const result = await collection.insertOne(document)
+          res.status(201).json({ ...document, id: result.insertedId.toHexString() })
+          return
         }
 
+        const acceptedFriendIds = await getAcceptedFriendIds(user.id)
+        const sanitizedBody = sanitizeWorkspacePatch(route.collection, req.body, acceptedFriendIds)
         const document = {
-          ...req.body,
+          ...defaultVisibilityFields(route.collection),
+          ...sanitizedBody,
           ...ownerFields(route.collection, user.id),
           createdAt: now,
           updatedAt: now,
@@ -153,7 +239,29 @@ apiRouter.all('*path', async (req, res, next) => {
       }
 
       if (req.method === 'PATCH' && route.id) {
-        const patch = sanitizeWorkspacePatch(route.collection, req.body)
+        if (route.collection === collections.friendships) {
+          const friendship = await db.collection<ApiRecord>(route.collection).findOne(
+            scopedIdQuery(route.id, scope),
+          )
+          const patch = sanitizeFriendshipPatch(req.body, friendship, user.id)
+          if (!friendship || Object.keys(patch).length === 0) {
+            res.status(403).json({ error: 'Only the invite recipient can accept this friendship.' })
+            return
+          }
+          const result = await db.collection<ApiRecord>(route.collection).findOneAndUpdate(
+            scopedIdQuery(route.id, scope),
+            { $set: { ...patch, updatedAt: new Date().toISOString() } },
+            { returnDocument: 'after' },
+          )
+          res.json(normalizeDocument(result))
+          return
+        }
+
+        const patch = sanitizeWorkspacePatch(
+          route.collection,
+          req.body,
+          await getAcceptedFriendIds(user.id),
+        )
         const result = await db.collection<ApiRecord>(route.collection).findOneAndUpdate(
           scopedIdQuery(route.id, scope),
           { $set: { ...patch, updatedAt: new Date().toISOString() } },
@@ -181,7 +289,7 @@ apiRouter.all('*path', async (req, res, next) => {
 
     if (req.method === 'POST' && path === '/calendar/events') {
       const now = new Date().toISOString()
-      const event = sanitizeCalendarEventCreate(req.body, user.id, now)
+      const event = sanitizeCalendarEventCreate(req.body, user.id, now, await getAcceptedFriendIds(user.id))
       const result = await db.collection(collections.calendarEvents).insertOne(event)
       res.status(201).json({ ...event, id: result.insertedId.toHexString() })
       return
@@ -189,7 +297,7 @@ apiRouter.all('*path', async (req, res, next) => {
 
     if (req.method === 'PATCH' && path.startsWith('/calendar/events/')) {
       const id = path.split('/').at(-1)
-      const patch = sanitizeCalendarEventPatch(req.body)
+      const patch = sanitizeCalendarEventPatch(req.body, await getAcceptedFriendIds(user.id))
       const result = await db.collection<ApiRecord>(collections.calendarEvents).findOneAndUpdate(
         scopedIdQuery(id, { ownerId: user.id }),
         { $set: { ...patch, updatedAt: new Date().toISOString() } },
@@ -253,6 +361,41 @@ apiRouter.all('*path', async (req, res, next) => {
         scopedIdQuery(id, { $or: [{ ownerId: user.id }, { assigneeIds: user.id }] }),
       )
       res.json({ ok: true })
+      return
+    }
+
+    if (req.method === 'GET' && path === '/calendar/invites') {
+      const invites = await db
+        .collection<ApiRecord>(collections.eventInvites)
+        .find({ $or: [{ fromUserId: user.id }, { toUserId: user.id }] })
+        .sort({ createdAt: -1 })
+        .toArray()
+      res.json(invites.map(normalizeDocument))
+      return
+    }
+
+    if (req.method === 'POST' && path === '/calendar/invites') {
+      const now = new Date().toISOString()
+      const acceptedFriendIds = new Set(await getAcceptedFriendIds(user.id))
+      const toUserId = typeof req.body.toUserId === 'string' ? req.body.toUserId : ''
+
+      if (!acceptedFriendIds.has(toUserId)) {
+        res.status(403).json({ error: 'Only accepted friends can receive calendar invites.' })
+        return
+      }
+
+      const invite = {
+        eventId: req.body.eventId,
+        fromUserId: user.id,
+        toUserId,
+        title: req.body.title,
+        time: req.body.time,
+        status: 'pending',
+        createdAt: now,
+        updatedAt: now,
+      }
+      const result = await db.collection(collections.eventInvites).insertOne(invite)
+      res.status(201).json({ ...invite, id: result.insertedId.toHexString() })
       return
     }
 

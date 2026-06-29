@@ -1,85 +1,135 @@
 # Warm Desk Garden Backend Setup
 
-這份專案目前採用免費優先部署：
+This project now uses Render as the single public website and API entry point.
+GitHub Pages is no longer used.
 
-- GitHub Pages：前端網站。
-- Render Free Web Service：Express API + Socket.IO 即時聊天。
-- MongoDB Atlas：主要資料庫。
-- Appwrite Cloud：Auth、Storage、Email Messaging。
+## Architecture
 
-目前 Render 免費服務沿用舊的 `defect-system` 服務，不新增第二個服務，也不需要填付款資料。
+- Render Web Service: serves the built React app from `dist`, exposes `/api/*`,
+  and hosts Socket.IO at `/socket.io`.
+- MongoDB Atlas: stores all workspace records and relationships, including
+  profiles, friendships, folders, notes, reflections, chat, albums, photos,
+  calendar events, tasks, invites, and notifications.
+- Appwrite Cloud: provides Auth, Storage, and optional Email Messaging. Storage
+  uploads are handled by the Render backend, not directly by the browser.
+- GitHub: stores source code and runs CI only. It does not deploy the site to
+  GitHub Pages.
 
-```text
-Render API URL: https://defect-system-bco5.onrender.com
-GitHub repo: https://github.com/b0b8760000-ops/warm-desk-garden
-```
+## Render Service
 
-## Render 設定
-
-在既有 Render Web Service `defect-system` 裡改成：
+Use the existing free Render service or create one from this repository:
 
 ```text
 Source: https://github.com/b0b8760000-ops/warm-desk-garden
 Branch: main
-Build Command: npm ci --include=dev && npm run server:build
+Build Command: npm ci --include=dev && npm run build && npm run server:build
 Start Command: npm run server:start
 Instance Type: Free
 ```
 
-Render Environment Variables：
+The Render URL becomes the website URL. The same origin also serves API calls,
+so the frontend can call `/api/...` without `VITE_RENDER_API_URL`.
+
+## Render Environment Variables
+
+Set these in Render. Do not commit real secret values to Git:
 
 ```text
 NODE_ENV=production
+VITE_APPWRITE_ENDPOINT=https://sgp.cloud.appwrite.io/v1
+VITE_APPWRITE_PROJECT_ID=6a39ed84003504b380f9
 APPWRITE_ENDPOINT=https://sgp.cloud.appwrite.io/v1
 APPWRITE_PROJECT_ID=6a39ed84003504b380f9
-APPWRITE_API_KEY=<貼到 Render，不要放進 Git>
-MONGODB_URI=<貼到 Render，不要放進 Git>
+APPWRITE_API_KEY=<Render secret>
+APPWRITE_BUCKET_ID=warm-desk-garden-files
+MONGODB_URI=<Render secret>
 MONGODB_DB_NAME=warm_desk_garden
-CORS_ORIGIN=https://b0b8760000-ops.github.io
+APPWRITE_EMAIL_TOPIC_ID=<optional>
 ```
 
-`APPWRITE_EMAIL_TOPIC_ID` 可先不填。沒有 Email topic 時，主要資料功能不會因此不能用。
+`APPWRITE_API_KEY` needs Storage file permissions and any Appwrite server
+permissions used by backend setup scripts. `MONGODB_URI` comes from MongoDB
+Atlas.
 
-## GitHub Pages 設定
+## Local Development
 
-`.github/workflows/pages.yml` 會把前端 build 成 GitHub Pages，並使用：
+Frontend-only Vite development:
+
+```powershell
+npm install
+npm run dev
+```
+
+Full backend build check:
+
+```powershell
+npm run build
+npm run server:build
+npm run server:start
+```
+
+For local backend secrets, copy `.env.backend.example` to `.env.backend.local`
+and fill values there. Keep `.env.backend.local` out of Git.
+
+## File Upload Flow
+
+1. Browser asks Appwrite Auth for a JWT.
+2. Browser sends `multipart/form-data` to `POST /api/files`.
+3. Render verifies the Appwrite JWT.
+4. Render checks accepted friends in MongoDB.
+5. Render uploads the file to Appwrite Storage with owner and accepted-friend
+   read permissions.
+6. Render returns file metadata to the browser.
+7. The app stores the metadata in MongoDB collections such as `noteAttachments`,
+   `photos`, or `reflectionPhotos`.
+
+This keeps Appwrite Storage permission generation out of the frontend.
+
+## MongoDB Collection Map
 
 ```text
-VITE_RENDER_API_URL=https://defect-system-bco5.onrender.com
+profiles
+friendships
+friendGroups
+folders
+notes
+noteAttachments
+reflections
+reflectionPhotos
+chatPosts
+chatReplies
+chatThreads
+chatMessages
+albums
+photos
+calendarEvents
+calendarTasks
+eventInvites
+notifications
+reminderJobs
 ```
 
-如果以後 Render 網址改了，要同步改：
+Calendar data stays in MongoDB. Appwrite is not used as the calendar database.
 
-- `.env.example`
-- `.github/workflows/pages.yml`
-- `README.md`
+## Appwrite Storage Bucket
 
-## 免費版限制
-
-Render Free Web Service 可用於 API 與 Socket.IO，但會有閒置休眠，第一次喚醒會慢一些。
-
-第一版先不開：
-
-- Render Background Worker
-- Render Cron Job
-- 任何需要信用卡或付款資料的 Render 服務
-
-需要長時間背景任務時，可以之後再評估：
-
-- Render 付費 worker/cron
-- GitHub Actions scheduled workflow
-- Appwrite Functions 排程
-
-## Secret 安全
-
-不要把真實 secret 寫入 GitHub repo。
-
-本機可以用：
+Use one bucket for now:
 
 ```text
-.env.backend.local
+warm-desk-garden-files
 ```
 
-GitHub repo 和 `.env.backend.example` 只放空白範例。
+Files are categorized in returned metadata with:
 
-如果曾經把真實 MongoDB URI 或 Appwrite API Key commit 到 GitHub，請到 MongoDB Atlas 與 Appwrite 重新產生新的 key/password，舊的刪掉。
+```text
+avatars
+backgrounds
+notes
+journals
+chat
+albums
+pdfs
+```
+
+The category is stored in MongoDB metadata; it is not a replacement for MongoDB
+ownership or visibility rules.

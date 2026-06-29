@@ -1,20 +1,17 @@
-name: Deploy GitHub Pages
+name: CI
 
 on:
   push:
     branches:
       - main
+  pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
+  contents: read
 
 jobs:
-  deploy:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,19 +29,14 @@ jobs:
       - name: Test
         run: npm test -- --run
 
-      - name: Build
+      - name: Lint
+        run: npm run lint
+
+      - name: Build frontend
         run: npm run build
         env:
-          GITHUB_PAGES: true
           VITE_APPWRITE_ENDPOINT: https://sgp.cloud.appwrite.io/v1
           VITE_APPWRITE_PROJECT_ID: 6a39ed84003504b380f9
-          VITE_APPWRITE_BUCKET_ID: warm-desk-garden-files
-          VITE_APPWRITE_API_FUNCTION_ID: warm-desk-garden-api
-          VITE_RENDER_API_URL: https://defect-system-bco5.onrender.com
 
-      - name: Deploy
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
-          publish_dir: dist
+      - name: Build server
+        run: npm run server:build
