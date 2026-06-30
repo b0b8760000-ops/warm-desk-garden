@@ -52,6 +52,11 @@ const navItems = [
 
 type Section = (typeof navItems)[number]['label']
 type AppSection = Section | '筆記'
+
+const visibleNavItems = navItems.filter((item) =>
+  ['首頁', '聊天', '好友', '相簿'].includes(item.label),
+)
+const SHOW_PARKED_WORKSPACE_PAGES = false
 type RetroLightboxItem = {
   id: string
   imageUrl: string
@@ -163,6 +168,11 @@ type StoredChatPost = ChatFeedPost & {
 
 type AuthStatus = 'checking' | 'guest' | 'authenticated'
 type SendInviteResult = false | 'sent' | 'accepted' | 'duplicate' | 'self'
+
+function readableErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
 type CalendarInvitePreview = {
   id: string
   title: string
@@ -1747,7 +1757,7 @@ function App() {
         ) : null}
 
         <nav className="nav-list">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon
             const active = item.label === activeSection
 
@@ -1809,11 +1819,8 @@ function App() {
           <DeskSurface
             userName={userName}
             setUserName={setUserName}
-            folders={ownedWorkspaceFolders}
-            notes={ownedWorkspaceNotes}
             photos={workspacePhotos}
             friends={acceptedWorkspaceFriends}
-            events={workspaceEvents}
             onNavigate={(section, folderId) => {
               setActiveSection(section)
               if (folderId) setSelectedFolderId(folderId)
@@ -1822,7 +1829,7 @@ function App() {
           />
         ) : null}
 
-        {activeSection === '資料夾' ? (
+        {SHOW_PARKED_WORKSPACE_PAGES && activeSection === '資料夾' ? (
           <FoldersPage
             folders={ownedWorkspaceFolders}
             onAddFolder={handleAddFolder}
@@ -1833,7 +1840,7 @@ function App() {
             }}
           />
         ) : null}
-        {activeSection === '筆記' ? (
+        {SHOW_PARKED_WORKSPACE_PAGES && activeSection === '筆記' ? (
           <NotesPage
             key={selectedFolderId}
             folders={ownedWorkspaceFolders}
@@ -1851,7 +1858,7 @@ function App() {
             onUpdateNoteVisibility={handleUpdateNoteVisibility}
           />
         ) : null}
-        {activeSection === '心得' ? (
+        {SHOW_PARKED_WORKSPACE_PAGES && activeSection === '心得' ? (
           <ReflectionsPage onOpenLightbox={setLightboxUrl} />
         ) : null}
         {activeSection === '聊天' ? (
@@ -1915,7 +1922,7 @@ function App() {
             onToggleStarPhoto={handleToggleStarPhoto}
           />
         ) : null}
-        {activeSection === '行事曆' ? (
+        {SHOW_PARKED_WORKSPACE_PAGES && activeSection === '行事曆' ? (
           <CalendarSurface
             events={workspaceEvents}
             tasks={nextTasks}
@@ -2249,32 +2256,19 @@ function App() {
 function DeskSurface({
   userName,
   setUserName,
-  folders,
-  notes,
   photos,
   friends,
-  events,
   onNavigate,
   onOpenLightbox,
 }: {
   userName: string
   setUserName: (name: string) => void
-  folders: FolderModel[]
-  notes: WorkspaceNote[]
   photos: Photo[]
   friends: Friend[]
-  events: CalendarEvent[]
   onNavigate: (section: AppSection, folderId?: string) => void
   onOpenLightbox: (url: string) => void
 }) {
-  const recentNotes = notes.slice(0, 3)
   const todayPhoto = photos[0]
-  const todayReflection = {
-    title: '今天的自己',
-    date: '2026.06.24 10:30',
-    weather: '晴天 28°C',
-    text: '把一句話寫完整，就像替自己倒一杯水。今天不急著分類，也不急著讓它變成結論，只先承認自己真的有一些感覺。',
-  }
 
   const [isEditing, setIsEditing] = useState(false)
   const [tempName, setTempName] = useState(userName)
@@ -2354,92 +2348,26 @@ function DeskSurface({
         <button
           className="action-btn"
           type="button"
-          onClick={() => {
-            if (folders[0]) {
-              onNavigate('筆記', folders[0].id)
-            } else {
-              onNavigate('資料夾')
-            }
-          }}
+          onClick={() => onNavigate('聊天')}
         >
-          <PenLine size={16} />
-          <span>新增筆記</span>
-        </button>
-        <button className="action-btn" type="button" onClick={() => onNavigate('心得')}>
-          <Heart size={16} />
-          <span>寫心得</span>
+          <MessageCircle size={16} />
+          <span>發聊天貼文</span>
         </button>
         <button className="action-btn" type="button" onClick={() => onNavigate('相簿')}>
           <Image size={16} />
           <span>上傳照片</span>
         </button>
-        <button className="action-btn" type="button" onClick={() => onNavigate('行事曆')}>
-          <CalendarDays size={16} />
-          <span>新增行程</span>
+        <button className="action-btn" type="button" onClick={() => onNavigate('好友')}>
+          <Users size={16} />
+          <span>管理好友</span>
         </button>
       </section>
 
       {/* Main 2x2 Desktop Grid */}
       <div className="desktop-grid">
-        {/* Card 1: 最近的筆記 */}
-        <article className="desktop-card panel">
-          <div className="card-header">
-            <h3>最近的筆記</h3>
-            <button
-              className="text-link-btn"
-              type="button"
-              onClick={() => onNavigate('資料夾')}
-            >
-              查看全部 <ChevronRight size={14} />
-            </button>
-          </div>
-          <div className="recent-notes-list">
-            {recentNotes.length > 0 ? (
-              recentNotes.map((note) => (
-                <div
-                  className="recent-note-row"
-                  key={note.id}
-                  onClick={() => {
-                    const folderObj = folders.find((f) => f.name === note.folder)
-                    onNavigate('筆記', folderObj?.id)
-                  }}
-                >
-                  {note.imageUrl && <img src={note.imageUrl} alt="" />}
-                  <div className="note-meta">
-                    <h4>{note.title}</h4>
-                    <span>
-                      {note.folder} · {note.date}
-                    </span>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="quiet-empty-text">還沒有筆記，先從資料夾新增第一則。</p>
-            )}
-          </div>
-        </article>
+        {/* Parked for now: folders, notes, reflections, and calendar desktop cards. */}
 
-        {/* Card 2: 今日心得 */}
-        <article className="desktop-card panel reflection-card">
-          <div className="card-header">
-            <h3>今日心得</h3>
-            <button
-              className="text-link-btn"
-              type="button"
-              onClick={() => onNavigate('心得')}
-            >
-              查看全部 <ChevronRight size={14} />
-            </button>
-          </div>
-          <div className="today-reflection-box">
-            <span className="paper-date">{todayReflection.date}</span>
-            <h4>{todayReflection.title}</h4>
-            <p>{todayReflection.text}</p>
-            <div className="plant-doodle" />
-          </div>
-        </article>
-
-        {/* Card 3: 今日照片 */}
+        {/* Card 1: 今日照片 */}
         <article className="desktop-card panel album-card">
           <div className="card-header">
             <h3>今日照片</h3>
@@ -2466,39 +2394,7 @@ function DeskSurface({
           </div>
         </article>
 
-        {/* Card 4: 今天行程 */}
-        <article className="desktop-card panel schedule-card">
-          <div className="card-header">
-            <h3>今天行程</h3>
-            <button
-              className="text-link-btn"
-              type="button"
-              onClick={() => onNavigate('行事曆')}
-            >
-              查看全部 <ChevronRight size={14} />
-            </button>
-          </div>
-          <div className="today-events-list">
-            {events.length > 0 ? (
-              events.slice(0, 3).map((event) => (
-                <div className={`mini-event-row ${event.color ?? 'sage'}`} key={event.id}>
-                  <div className="event-bullet" />
-                  <div className="event-info">
-                    <strong>{event.title}</strong>
-                    <p>{event.visibility === 'shared' ? '好友共同日曆' : '個人行程'}</p>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="quiet-empty-text">今天還沒有行程。</p>
-            )}
-          </div>
-        </article>
-      </div>
-
-      {/* Bottom Row: Friends Panel, Calendar, Sticky Note from mockup */}
-      <div className="desktop-bottom-grid">
-        {/* Card 5: 朋友動態 (Horizontal layout) */}
+        {/* Card 2: 朋友動態 */}
         <article className="desktop-card panel friends-card">
           <div className="card-header">
             <h3>朋友動態</h3>
@@ -2524,44 +2420,34 @@ function DeskSurface({
             )}
           </div>
         </article>
+      </div>
 
-        {/* Card 6: 六月行事曆 */}
-        <article className="desktop-card panel calendar-mini-card">
+      {/* Bottom Row: Friends Panel, Calendar, Sticky Note from mockup */}
+      <div className="desktop-bottom-grid">
+        {/* Card 3: 聊天入口 */}
+        <article className="desktop-card panel friends-card">
           <div className="card-header">
-            <h3>六月行事曆</h3>
-            <button className="text-link-btn" type="button" onClick={() => onNavigate('行事曆')}>
-              查看全部 <ChevronRight size={14} />
+            <h3>好友聊天</h3>
+            <button className="text-link-btn" type="button" onClick={() => onNavigate('聊天')}>
+              進入聊天 <ChevronRight size={14} />
             </button>
           </div>
-          <div className="mini-calendar-grid">
-            {['日', '一', '二', '三', '四', '五', '六'].map((d) => (
-              <span className="mini-weekday" key={d}>
-                {d}
-              </span>
-            ))}
-            {Array.from({ length: 35 }, (_, index) => {
-              const day = index - 0 // June starts on Monday (1st)
-              const isValid = day >= 1 && day <= 30
-              const isToday = day === 24
-              const hasEvent = day === 24 || day === 25
-
-              return (
-                <span
-                  key={index}
-                  className={`mini-day-cell ${isToday ? 'today' : ''} ${hasEvent ? 'has-event' : ''} ${
-                    !isValid ? 'empty' : ''
-                  }`}
-                >
-                  {isValid ? day : ''}
-                </span>
-              )
-            })}
+          <div className="today-events-list">
+            <div className="mini-event-row sage">
+              <div className="event-bullet" />
+              <div className="event-info">
+                <strong>先完成好友、聊天與相簿</strong>
+                <p>目前把資料夾、心得與行事曆暫時收起，先整理社交與照片資料流。</p>
+              </div>
+            </div>
           </div>
         </article>
 
-        {/* Card 7: 便條小卡 */}
+        {/* Parked for now: mini calendar card. */}
+
+        {/* Card 4: 便條小卡 */}
         <div className="sticky-post-it">
-          <p>今天也慢慢生活，把平凡的日子組成喜歡的樣子。🌿</p>
+          <p>先把好友、聊天與相簿做穩，再把資料夾、心得與行事曆慢慢接回來。🌿</p>
         </div>
       </div>
     </div>
@@ -4681,7 +4567,7 @@ function FriendsPage({
       }
     } catch (err) {
       console.error('Search user failed:', err)
-      setSearchError('搜尋時發生錯誤，請稍後再試。')
+      setSearchError(readableErrorMessage(err, '搜尋時發生錯誤，請稍後再試。'))
     } finally {
       setIsSearching(false)
     }
@@ -7007,7 +6893,7 @@ function AddFriendModal({
       }
     } catch (err) {
       console.error('Search user failed:', err)
-      setSearchError('搜尋時發生錯誤，請稍後再試。')
+      setSearchError(readableErrorMessage(err, '搜尋時發生錯誤，請稍後再試。'))
     } finally {
       setIsSearching(false)
     }

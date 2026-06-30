@@ -2,9 +2,8 @@ import { createAppwriteJwt } from './appwriteClient'
 
 const renderApiUrl = import.meta.env.VITE_RENDER_API_URL ?? ''
 const renderApiBaseUrl = renderApiUrl.replace(/\/$/, '')
-const shouldUseRenderApi = Boolean(renderApiUrl || import.meta.env.PROD)
 
-export const isApiConfigured = shouldUseRenderApi
+export const isApiConfigured = true
 
 export type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE'
 
@@ -23,15 +22,19 @@ function buildRenderApiUrl(path: string) {
   return `${renderApiBaseUrl}/api${path}`
 }
 
+function normalizeNetworkError(error: unknown): never {
+  if (error instanceof TypeError && error.message === 'Failed to fetch') {
+    throw new Error('無法連線到後端 API，請確認 Render 服務與 CORS 設定。')
+  }
+
+  throw error
+}
+
 export async function callApi<T>(
   method: ApiMethod,
   path: string,
   payload?: unknown,
 ): Promise<T> {
-  if (!shouldUseRenderApi) {
-    throw new Error('Render API is required to call the backend.')
-  }
-
   const jwt = await createAppwriteJwt()
   const response = await fetch(buildRenderApiUrl(path), {
     method,
@@ -40,7 +43,7 @@ export async function callApi<T>(
       'content-type': 'application/json',
     },
     body: method === 'GET' ? undefined : JSON.stringify(payload ?? {}),
-  })
+  }).catch(normalizeNetworkError)
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'API request failed.' }))
@@ -55,10 +58,6 @@ export async function uploadFile(
   readUserIds: string[] = [],
   category = 'notes',
 ): Promise<UploadedFileMetadata> {
-  if (!shouldUseRenderApi) {
-    throw new Error('Render API is required for file uploads.')
-  }
-
   const jwt = await createAppwriteJwt()
   const formData = new FormData()
   formData.set('file', file)
@@ -71,7 +70,7 @@ export async function uploadFile(
       authorization: `Bearer ${jwt.jwt}`,
     },
     body: formData,
-  })
+  }).catch(normalizeNetworkError)
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'File upload failed.' }))

@@ -9,17 +9,21 @@ import { Server } from 'socket.io'
 import { apiRouter } from './api.js'
 import { getCurrentUserFromRequest } from './auth.js'
 import { collections } from './collections.js'
+import { buildAllowedOrigins, isCorsOriginAllowed } from './corsPolicy.js'
 import { getDb } from './db.js'
 import { chatPostRooms } from './security.js'
 
 const app = express()
-const allowedOrigins = (process.env.CORS_ORIGIN ?? '')
-  .split(',')
-  .map((origin) => origin.trim())
-  .filter(Boolean)
+const allowedOrigins = buildAllowedOrigins(process.env.CORS_ORIGIN ?? '')
+const corsOrigin = (
+  origin: string | undefined,
+  callback: (error: Error | null, allow?: boolean) => void,
+) => {
+  callback(null, isCorsOriginAllowed(origin, allowedOrigins))
+}
 
 app.use(cors({
-  origin: allowedOrigins.length ? allowedOrigins : true,
+  origin: corsOrigin,
   credentials: true,
 }))
 app.use(express.json({ limit: '10mb' }))
@@ -55,7 +59,7 @@ app.use(errorHandler)
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: {
-    origin: allowedOrigins.length ? allowedOrigins : true,
+    origin: corsOrigin,
     credentials: true,
   },
 })
