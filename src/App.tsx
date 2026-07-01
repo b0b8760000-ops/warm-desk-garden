@@ -2260,6 +2260,8 @@ function DeskSurface({
   friends,
   onNavigate,
   onOpenLightbox,
+  onStartChat = () => {},
+  chatThreads = [],
 }: {
   userName: string
   setUserName: (name: string) => void
@@ -2267,11 +2269,21 @@ function DeskSurface({
   friends: Friend[]
   onNavigate: (section: AppSection, folderId?: string) => void
   onOpenLightbox: (url: string) => void
+  onStartChat?: (targetId: string) => void
+  chatThreads?: ChatThread[]
 }) {
   const todayPhoto = photos[0]
 
   const [isEditing, setIsEditing] = useState(false)
   const [tempName, setTempName] = useState(userName)
+  const [memo, setMemo] = useState(() => {
+    try {
+      return (typeof localStorage !== 'undefined' && localStorage.getItem('wdg_sticky_memo')) || '寫些便簽或備忘在這裡... 📌\n(點選即可進行編輯)'
+    } catch {
+      return '寫些便簽或備忘在這裡... 📌\n(點選即可進行編輯)'
+    }
+  })
+  const [isEditingMemo, setIsEditingMemo] = useState(false)
 
   const handleSave = () => {
     const trimmed = tempName.trim()
@@ -2405,7 +2417,13 @@ function DeskSurface({
           <div className="friend-horizontal-list">
             {friends.length > 0 ? (
               friends.map((friend) => (
-                <div className="friend-avatar-column" key={friend.id}>
+                <div
+                  className="friend-avatar-column clickable"
+                  key={friend.id}
+                  onClick={() => onStartChat(friend.id)}
+                  style={{ cursor: 'pointer' }}
+                  title={`與 ${friend.name} 聊天`}
+                >
                   <div className="avatar-wrap">
                     <img src={friend.avatarUrl} alt={friend.name} />
                     <span className={`status-dot ${friend.tone}`} />
@@ -2432,22 +2450,82 @@ function DeskSurface({
               進入聊天 <ChevronRight size={14} />
             </button>
           </div>
-          <div className="today-events-list">
-            <div className="mini-event-row sage">
-              <div className="event-bullet" />
-              <div className="event-info">
-                <strong>先完成好友、聊天與相簿</strong>
-                <p>目前把資料夾、心得與行事曆暫時收起，先整理社交與照片資料流。</p>
-              </div>
-            </div>
+          <div className="today-events-list recent-chats-list">
+            {chatThreads && chatThreads.length > 0 ? (
+              chatThreads.slice(0, 3).map((thread) => {
+                const lastMsg = thread.messages[thread.messages.length - 1]
+                return (
+                  <div
+                    className="mini-event-row sage clickable-chat-row"
+                    key={thread.id}
+                    onClick={() => onStartChat(thread.id)}
+                    style={{ cursor: 'pointer', padding: '8px', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}
+                    title={`進入 ${thread.name} 的聊天室`}
+                  >
+                    <div className="thread-avatar-area" style={{ width: '28px', height: '28px', borderRadius: '50%', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#e2e8f0', fontSize: '14px' }}>
+                      {thread.type === 'group' ? (
+                        '👥'
+                      ) : (
+                        <img src={thread.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=120&q=80'} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      )}
+                    </div>
+                    <div className="event-info" style={{ flex: 1 }}>
+                      <strong style={{ fontSize: '13px' }}>{thread.name}</strong>
+                      <p style={{ fontSize: '11.5px', margin: 0, color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '200px' }}>
+                        {lastMsg ? `${lastMsg.author}: ${lastMsg.text}` : '尚無對話紀錄'}
+                      </p>
+                    </div>
+                  </div>
+                )
+              })
+            ) : (
+              <p className="quiet-empty-text">尚無任何聊天對話。</p>
+            )}
           </div>
         </article>
 
         {/* Parked for now: mini calendar card. */}
 
         {/* Card 4: 便條小卡 */}
-        <div className="sticky-post-it">
-          <p>先把好友、聊天與相簿做穩，再把資料夾、心得與行事曆慢慢接回來。🌿</p>
+        <div className="sticky-post-it" style={{ cursor: 'pointer' }}>
+          {isEditingMemo ? (
+            <textarea
+              className="sticky-post-it-textarea"
+              value={memo}
+              onChange={(e) => {
+                const val = e.target.value
+                setMemo(val)
+                try {
+                  if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem('wdg_sticky_memo', val)
+                  }
+                } catch (err) {
+                  console.warn(err)
+                }
+              }}
+              onBlur={() => setIsEditingMemo(false)}
+              autoFocus
+              style={{
+                width: '100%',
+                height: '100%',
+                background: 'transparent',
+                border: 'none',
+                resize: 'none',
+                outline: 'none',
+                fontFamily: 'inherit',
+                fontSize: '14px',
+                color: '#475569',
+              }}
+            />
+          ) : (
+            <div
+              onClick={() => setIsEditingMemo(true)}
+              style={{ width: '100%', height: '100%' }}
+              title="點擊編輯便簽"
+            >
+              <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{memo}</p>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -3972,6 +4050,7 @@ function ChatPage({
   const [searchQuery, setSearchQuery] = useState('')
   const [commentDraft, setCommentDraft] = useState('')
   const [replyDraft, setReplyDraft] = useState('')
+  const chatPhotoInputRef = useRef<HTMLInputElement | null>(null)
 
   const activePost = posts.find((post) => post.id === selectedPostId) ?? posts[0]
   const activeThread = chatThreads.find((t) => t.id === activeThreadId) || chatThreads[0]
@@ -4278,18 +4357,35 @@ function ChatPage({
                 </span>
                 <div className="postcard-actions-top">
                   <button type="button">收藏對話</button>
-                  <button type="button">連結到行事曆</button>
                 </div>
               </div>
 
               <div className="postcard-thread-container compact-chat-thread">
-                {activeThread.messages.map((message) => (
-                  <div className={message.mine ? 'postcard my-msg-card' : 'postcard friend-msg-card'} key={message.id}>
-                    <div className="postcard-stamp">{message.mine ? 'Reply' : 'Chat'}</div>
-                    <h3>{message.author}</h3>
-                    <p>{message.text}</p>
-                  </div>
-                ))}
+                {activeThread.messages.map((message) => {
+                  const isImg = message.text.startsWith('http') && (
+                    message.text.includes('unsplash.com') ||
+                    message.text.includes('/files/') ||
+                    message.text.match(/\.(jpeg|jpg|gif|png|webp)/i)
+                  );
+                  return (
+                    <div className={message.mine ? 'postcard my-msg-card' : 'postcard friend-msg-card'} key={message.id}>
+                      <div className="postcard-stamp">{message.mine ? 'Reply' : 'Chat'}</div>
+                      <h3>{message.author}</h3>
+                      {isImg ? (
+                        <div className="chat-postcard-image-wrap" style={{ marginTop: '8px', borderRadius: '4px', overflow: 'hidden' }}>
+                          <img
+                            src={message.text}
+                            alt="Shared Photo"
+                            style={{ maxWidth: '100%', maxHeight: '200px', objectFit: 'contain', cursor: 'pointer' }}
+                            onClick={() => onOpenLightbox(message.text)}
+                          />
+                        </div>
+                      ) : (
+                        <p>{message.text}</p>
+                      )}
+                    </div>
+                  );
+                })}
                 {activeThread.messages.length === 0 && (
                   <div className="chat-empty-state">尚無對話訊息，寫信給對方吧！</div>
                 )}
@@ -4305,14 +4401,47 @@ function ChatPage({
                 ></textarea>
                 <div className="composer-actions">
                   <div className="left-composer-tools">
-                    <button type="button" aria-label="傳送照片">
+                    <button
+                      type="button"
+                      aria-label="傳送照片"
+                      onClick={() => chatPhotoInputRef.current?.click()}
+                    >
                       <Image aria-hidden="true" size={15} />
                       傳送照片
                     </button>
-                    <button type="button" aria-label="收藏到筆記">
-                      <Paperclip aria-hidden="true" size={15} />
-                      收藏到筆記
-                    </button>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      ref={chatPhotoInputRef}
+                      style={{ display: 'none' }}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0]
+                        if (!file) return
+                        try {
+                          const imageUrl = await uploadSharedFile(file, 'chat')
+                          if (imageUrl) {
+                            const nextMessage: ChatThreadMessage = {
+                              id: `thread-msg-${Date.now()}`,
+                              author: '我',
+                              text: imageUrl,
+                              time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
+                              mine: true,
+                            }
+                            setChatThreads((prev) =>
+                              prev.map((t) => {
+                                if (t.id === activeThread.id) {
+                                  return { ...t, messages: [...t.messages, nextMessage] }
+                                }
+                                return t
+                              }),
+                            )
+                          }
+                        } catch (err) {
+                          console.error('Failed to send photo in chat:', err)
+                          alert('傳送照片失敗，請稍後再試。')
+                        }
+                      }}
+                    />
                   </div>
                   <button type="button" className="send-letter-btn" onClick={sendThreadMessage}>
                     傳送文字
