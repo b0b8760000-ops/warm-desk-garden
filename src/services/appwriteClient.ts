@@ -1,7 +1,7 @@
 import { Account, Client, ID } from 'appwrite'
 
-const endpoint = import.meta.env.VITE_APPWRITE_ENDPOINT ?? ''
-const projectId = import.meta.env.VITE_APPWRITE_PROJECT_ID ?? ''
+const endpoint = import.meta.env.VITE_APPWRITE_ENDPOINT || 'https://sgp.cloud.appwrite.io/v1'
+const projectId = import.meta.env.VITE_APPWRITE_PROJECT_ID || '6a39ed84003504b380f9'
 
 export const appwriteConfig = {
   endpoint,
